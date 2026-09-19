@@ -479,17 +479,40 @@ class OblikWorkbook:
         identified = identified.sort_values(["_asset_key", "_sort_date", "_excel_row"])
         latest = identified.groupby("_asset_key", as_index=False).tail(1)
 
+        # Кількісні позиції/запаси без унікального номера поки не
+        # згортаємо автоматично. Зберігаємо їхні поточні рядки без змін,
+        # щоб перебудова поштучного майна не призвела до втрати даних.
+        existing_current = self.dataframe(SHEET_CURRENT)
+        preserved_rows = []
+        if not existing_current.empty:
+            for _, current_row in existing_current.iterrows():
+                inv = norm(current_row.get(inv_col))
+                serial = norm(current_row.get(serial_col))
+                if not inv and not serial:
+                    preserved_rows.append({h: current_row.get(h) for h in headers})
+
         for row in range(3, ws_cur.max_row + 1):
             for col in range(1, min(len(headers), ws_cur.max_column) + 1):
                 ws_cur.cell(row, col).value = None
 
         out_row = 3
-        for seq, (_, record) in enumerate(latest.iterrows(), 1):
+        sequence = 1
+        for _, record in latest.iterrows():
             for col, header in enumerate(headers, 1):
                 value = record.get(header)
                 if header == "№ з/п":
-                    value = seq
+                    value = sequence
                 ws_cur.cell(out_row, col, value)
+            sequence += 1
+            out_row += 1
+
+        for record in preserved_rows:
+            for col, header in enumerate(headers, 1):
+                value = record.get(header)
+                if header == "№ з/п":
+                    value = sequence
+                ws_cur.cell(out_row, col, value)
+            sequence += 1
             out_row += 1
 
         self.dirty = True
@@ -732,7 +755,7 @@ class MainWindow(QMainWindow):
         self._update_edit_permissions()
 
     def _update_edit_permissions(self):
-        editable = self.current_sheet in (SHEET_MOVEMENT, SHEET_STAFF)
+        editable = self.current_sheet == SHEET_MOVEMENT
         enabled = editable and self.model.wb is not None
         self.btn_add.setEnabled(enabled)
         self.btn_edit.setEnabled(enabled)
@@ -799,7 +822,7 @@ class MainWindow(QMainWindow):
         return int(item.data(Qt.UserRole)) if item and item.data(Qt.UserRole) else None
 
     def add_record(self):
-        if self.model.wb is None or self.current_sheet not in (SHEET_MOVEMENT, SHEET_STAFF):
+        if self.model.wb is None or self.current_sheet != SHEET_MOVEMENT:
             return
         headers = self.model.headers(self.current_sheet)
         dialog = RecordDialog(headers, parent=self)
@@ -821,7 +844,7 @@ class MainWindow(QMainWindow):
         self.refresh_table()
 
     def edit_record(self, *_):
-        if self.model.wb is None or self.current_sheet not in (SHEET_MOVEMENT, SHEET_STAFF):
+        if self.model.wb is None or self.current_sheet != SHEET_MOVEMENT:
             return
         excel_row = self._selected_excel_row()
         if not excel_row:
@@ -844,7 +867,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Змінено полів: {len(changes)}. Записано в Контроль змін.", 5000)
 
     def delete_record(self):
-        if self.model.wb is None or self.current_sheet not in (SHEET_MOVEMENT, SHEET_STAFF):
+        if self.model.wb is None or self.current_sheet != SHEET_MOVEMENT:
             return
         excel_row = self._selected_excel_row()
         if not excel_row:

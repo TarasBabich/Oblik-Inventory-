@@ -22,9 +22,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Smoke test core logic
+        run: |
+          python tests/smoke_test.py
+
       - name: Build Oblik.exe
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name Oblik --collect-all PySide6 --collect-all pandas src/main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name Oblik src/main.py
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
