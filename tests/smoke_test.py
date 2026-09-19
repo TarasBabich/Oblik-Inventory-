@@ -32,10 +32,12 @@ def main():
         r1 = record("INV-001", "SN-001", "Н-1", "01.01.2024", "А-1", "02.01.2024", "РРЕБ")
         r2 = record("INV-001", "SN-001", "Н-2", "01.02.2024", "А-2", "02.02.2024", "1 МБ")
         model.append_record(SHEET_MOVEMENT, r1, "test")
-        model.append_record(SHEET_MOVEMENT, r2, "test")
 
+        # Як і в інтерфейсі: перевіряємо майбутній запис ДО його збереження.
+        # Те саме майно з іншими документами не має бути повним дублем.
         dup = model.score_candidate_duplicate(r2)
         assert dup.score < 5
+        model.append_record(SHEET_MOVEMENT, r2, "test")
 
         count, skipped = model.rebuild_current_state()
         assert count == 1
