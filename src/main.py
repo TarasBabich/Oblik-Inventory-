@@ -152,11 +152,27 @@ def numeric_value(value: Any) -> Optional[float]:
         return None
 
 
-def format_decimal(value: Optional[float]) -> str:
+def format_decimal(value: Optional[float], decimals: int = 2) -> str:
     """Людинозрозуміле число для інтерфейсу: 12 500,00."""
     if value is None:
         return "—"
-    return f"{value:,.2f}".replace(",", " ").replace(".", ",")
+    return f"{value:,.{decimals}f}".replace(",", " ").replace(".", ",")
+
+
+def calculate_total(price: Any, quantity: Any) -> Optional[float]:
+    price_value = numeric_value(price)
+    qty_value = numeric_value(quantity)
+    if price_value is None or qty_value is None:
+        return None
+    return price_value * qty_value
+
+
+def calculate_unit_price(total: Any, quantity: Any) -> Optional[float]:
+    total_value = numeric_value(total)
+    qty_value = numeric_value(quantity)
+    if total_value is None or qty_value is None or qty_value == 0:
+        return None
+    return total_value / qty_value
 
 
 def parse_user_value(header: str, text: str) -> Any:
@@ -583,6 +599,8 @@ class RecordDialog(QDialog):
         self.resize(760, 760)
         self.inputs = {}
         self.reverse_calc_mode = False
+        self.calculated_price: Optional[float] = None
+        self.calculated_sum: Optional[float] = None
 
         outer = QVBoxLayout(self)
         scroll_host = QWidget()
@@ -686,15 +704,13 @@ class RecordDialog(QDialog):
         # При поверненні у звичайний режим переносимо розраховану ціну
         # у поле вводу, щоб користувач не втратив результат.
         if self.reverse_calc_mode and not checked:
-            calculated_price = numeric_value(self.price_label.text())
-            if calculated_price is not None:
-                self.price_edit.setText(str(calculated_price))
+            if self.calculated_price is not None:
+                self.price_edit.setText(str(self.calculated_price))
 
         # При вході у режим "від суми" підставляємо поточну розраховану суму.
         if not self.reverse_calc_mode and checked and not self.sum_edit.text().strip():
-            current_sum = numeric_value(self.sum_label.text())
-            if current_sum is not None:
-                self.sum_edit.setText(str(current_sum))
+            if self.calculated_sum is not None:
+                self.sum_edit.setText(str(self.calculated_sum))
 
         self.reverse_calc_mode = checked
         self.price_stack.setCurrentIndex(1 if checked else 0)
@@ -706,17 +722,13 @@ class RecordDialog(QDialog):
         qty = numeric_value(qty_widget.text()) if isinstance(qty_widget, QLineEdit) else None
 
         if self.reverse_calc_mode:
-            total = numeric_value(self.sum_edit.text())
-            if total is None or qty is None or qty == 0:
-                self.price_label.setText("—")
-            else:
-                self.price_label.setText(format_decimal(total / qty))
+            self.calculated_price = calculate_unit_price(self.sum_edit.text(), qty)
+            self.calculated_sum = numeric_value(self.sum_edit.text())
+            self.price_label.setText(format_decimal(self.calculated_price, 5))
         else:
-            price = numeric_value(self.price_edit.text())
-            if price is None or qty is None:
-                self.sum_label.setText("—")
-            else:
-                self.sum_label.setText(format_decimal(price * qty))
+            self.calculated_price = numeric_value(self.price_edit.text())
+            self.calculated_sum = calculate_total(self.price_edit.text(), qty)
+            self.sum_label.setText(format_decimal(self.calculated_sum, 2))
 
     def accept(self):
         if self.reverse_calc_mode:
@@ -737,8 +749,7 @@ class RecordDialog(QDialog):
         for header, widget in self.inputs.items():
             if header == "Ціна":
                 if self.reverse_calc_mode:
-                    value = numeric_value(self.price_label.text())
-                    out[header] = value
+                    out[header] = self.calculated_price
                 else:
                     out[header] = parse_user_value(header, self.price_edit.text())
                 continue
@@ -747,7 +758,7 @@ class RecordDialog(QDialog):
                 if self.reverse_calc_mode:
                     out[header] = numeric_value(self.sum_edit.text())
                 else:
-                    out[header] = numeric_value(self.sum_label.text())
+                    out[header] = self.calculated_sum
                 continue
 
             if isinstance(widget, QComboBox):
