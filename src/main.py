@@ -39,10 +39,11 @@ from PySide6.QtWidgets import (
     QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QPushButton, QSplitter, QStatusBar,
     QTableWidget, QTableWidgetItem, QTextEdit, QToolBar, QVBoxLayout, QWidget,
+    QStackedWidget,
 )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -149,6 +150,13 @@ def numeric_value(value: Any) -> Optional[float]:
         return float(text)
     except ValueError:
         return None
+
+
+def format_decimal(value: Optional[float]) -> str:
+    """Людинозрозуміле число для інтерфейсу: 12 500,00."""
+    if value is None:
+        return "—"
+    return f"{value:,.2f}".replace(",", " ").replace(".", ",")
 
 
 def parse_user_value(header: str, text: str) -> Any:
@@ -574,11 +582,42 @@ class RecordDialog(QDialog):
         self.setWindowTitle("Запис майна")
         self.resize(760, 760)
         self.inputs = {}
+        self.reverse_calc_mode = False
 
         outer = QVBoxLayout(self)
         scroll_host = QWidget()
         form = QFormLayout(scroll_host)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignTop)
+
+        self.price_edit = QLineEdit(display_value(values.get("Ціна") if values else None))
+        self.price_label = QLabel("—")
+        self.price_label.setStyleSheet("font-weight: 600; padding: 7px 10px;")
+        self.price_stack = QStackedWidget()
+        self.price_stack.addWidget(self.price_edit)
+        self.price_stack.addWidget(self.price_label)
+
+        self.sum_label = QLabel("—")
+        self.sum_label.setStyleSheet("font-weight: 600; padding: 7px 10px;")
+        self.sum_edit = QLineEdit()
+        self.sum_edit.setPlaceholderText("Введіть загальну вартість")
+        self.sum_stack = QStackedWidget()
+        self.sum_stack.addWidget(self.sum_label)
+        self.sum_stack.addWidget(self.sum_edit)
+
+        self.reverse_button = QPushButton("⟳")
+        self.reverse_button.setCheckable(True)
+        self.reverse_button.setFixedWidth(44)
+        self.reverse_button.setToolTip("Перемкнути: розрахувати ціну із загальної суми")
+        self.reverse_button.toggled.connect(self._set_reverse_calc_mode)
+
+        reverse_host = QWidget()
+        reverse_layout = QHBoxLayout(reverse_host)
+        reverse_layout.setContentsMargins(0, 0, 0, 0)
+        reverse_layout.addWidget(self.reverse_button)
+        reverse_text = QLabel("Розрахунок від суми")
+        reverse_text.setStyleSheet("font-weight: 600;")
+        reverse_layout.addWidget(reverse_text)
+        reverse_layout.addStretch(1)
 
         for header in headers:
             if header == "№ з/п":
@@ -601,10 +640,10 @@ class RecordDialog(QDialog):
                 widget = QTextEdit()
                 widget.setMaximumHeight(90)
                 widget.setPlainText(display_value(current))
+            elif header == "Ціна":
+                widget = self.price_stack
             elif header == "Сума":
-                widget = QLineEdit()
-                widget.setReadOnly(True)
-                widget.setPlaceholderText("Розраховується автоматично")
+                widget = self.sum_stack
             else:
                 widget = QLineEdit(display_value(current))
                 if "дата" in header.casefold():
@@ -613,12 +652,15 @@ class RecordDialog(QDialog):
             self.inputs[header] = widget
             form.addRow(label, widget)
 
-        price_widget = self.inputs.get("Ціна")
+            if header == "Кількість":
+                form.addRow(QLabel(""), reverse_host)
+
         qty_widget = self.inputs.get("Кількість")
-        if isinstance(price_widget, QLineEdit) and isinstance(qty_widget, QLineEdit):
-            price_widget.textChanged.connect(self._refresh_sum)
-            qty_widget.textChanged.connect(self._refresh_sum)
-            self._refresh_sum()
+        if isinstance(qty_widget, QLineEdit):
+            qty_widget.textChanged.connect(self._refresh_calculation)
+        self.price_edit.textChanged.connect(self._refresh_calculation)
+        self.sum_edit.textChanged.connect(self._refresh_calculation)
+        self._refresh_calculation()
 
         from PySide6.QtWidgets import QScrollArea
         scroll = QScrollArea()
@@ -636,32 +678,86 @@ class RecordDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
-    def _refresh_sum(self):
-        sum_widget = self.inputs.get("Сума")
-        price_widget = self.inputs.get("Ціна")
+    def _set_reverse_calc_mode(self, checked: bool):
+        """Перемикає джерело розрахунку: ціна або загальна сума."""
+        if checked == self.reverse_calc_mode:
+            return
+
+        # При поверненні у звичайний режим переносимо розраховану ціну
+        # у поле вводу, щоб користувач не втратив результат.
+        if self.reverse_calc_mode and not checked:
+            calculated_price = numeric_value(self.price_label.text())
+            if calculated_price is not None:
+                self.price_edit.setText(str(calculated_price))
+
+        # При вході у режим "від суми" підставляємо поточну розраховану суму.
+        if not self.reverse_calc_mode and checked and not self.sum_edit.text().strip():
+            current_sum = numeric_value(self.sum_label.text())
+            if current_sum is not None:
+                self.sum_edit.setText(str(current_sum))
+
+        self.reverse_calc_mode = checked
+        self.price_stack.setCurrentIndex(1 if checked else 0)
+        self.sum_stack.setCurrentIndex(1 if checked else 0)
+        self._refresh_calculation()
+
+    def _refresh_calculation(self):
         qty_widget = self.inputs.get("Кількість")
-        if not isinstance(sum_widget, QLineEdit):
-            return
-        if not isinstance(price_widget, QLineEdit) or not isinstance(qty_widget, QLineEdit):
-            sum_widget.clear()
-            return
-        price = numeric_value(price_widget.text())
-        qty = numeric_value(qty_widget.text())
-        if price is None or qty is None:
-            sum_widget.clear()
+        qty = numeric_value(qty_widget.text()) if isinstance(qty_widget, QLineEdit) else None
+
+        if self.reverse_calc_mode:
+            total = numeric_value(self.sum_edit.text())
+            if total is None or qty is None or qty == 0:
+                self.price_label.setText("—")
+            else:
+                self.price_label.setText(format_decimal(total / qty))
         else:
-            result = price * qty
-            sum_widget.setText(f"{result:.2f}")
+            price = numeric_value(self.price_edit.text())
+            if price is None or qty is None:
+                self.sum_label.setText("—")
+            else:
+                self.sum_label.setText(format_decimal(price * qty))
+
+    def accept(self):
+        if self.reverse_calc_mode:
+            total = numeric_value(self.sum_edit.text())
+            qty_widget = self.inputs.get("Кількість")
+            qty = numeric_value(qty_widget.text()) if isinstance(qty_widget, QLineEdit) else None
+            if total is not None and (qty is None or qty == 0):
+                QMessageBox.warning(
+                    self,
+                    "Неможливо розрахувати ціну",
+                    "Для розрахунку ціни від суми потрібно вказати кількість, більшу за нуль.",
+                )
+                return
+        super().accept()
 
     def data(self):
         out = {}
         for header, widget in self.inputs.items():
+            if header == "Ціна":
+                if self.reverse_calc_mode:
+                    value = numeric_value(self.price_label.text())
+                    out[header] = value
+                else:
+                    out[header] = parse_user_value(header, self.price_edit.text())
+                continue
+
+            if header == "Сума":
+                if self.reverse_calc_mode:
+                    out[header] = numeric_value(self.sum_edit.text())
+                else:
+                    out[header] = numeric_value(self.sum_label.text())
+                continue
+
             if isinstance(widget, QComboBox):
                 text = widget.currentText()
             elif isinstance(widget, QTextEdit):
                 text = widget.toPlainText()
-            else:
+            elif isinstance(widget, QLineEdit):
                 text = widget.text()
+            else:
+                text = ""
             out[header] = parse_user_value(header, text)
         return out
 
