@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price)
 import pandas as pd
 
 
@@ -26,6 +26,12 @@ def record(inv, serial, order, order_date, act, act_date, location, qty=1):
 
 
 def main():
+    assert calculate_total(1250.50, 4) == 5002.0
+    unit_price = calculate_unit_price(100, 3)
+    assert unit_price is not None
+    assert abs(unit_price * 3 - 100) < 1e-10
+    assert calculate_unit_price(100, 0) is None
+
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "test.xlsx"
         model = OblikWorkbook()
