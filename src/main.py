@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -111,8 +111,19 @@ DUPLICATE_FIELDS = {
 }
 
 
-def norm(value: Any) -> str:
+def is_blank(value: Any) -> bool:
+    """Єдина перевірка порожніх значень, включно з pandas NaT/NaN."""
     if value is None:
+        return True
+    try:
+        blank = pd.isna(value)
+        return bool(blank)
+    except (TypeError, ValueError):
+        return False
+
+
+def norm(value: Any) -> str:
+    if is_blank(value):
         return ""
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d")
@@ -120,11 +131,24 @@ def norm(value: Any) -> str:
 
 
 def display_value(value: Any) -> str:
-    if value is None:
+    if is_blank(value):
         return ""
     if isinstance(value, datetime):
         return value.strftime("%d.%m.%Y")
     return str(value)
+
+
+def numeric_value(value: Any) -> Optional[float]:
+    """Перетворює число/текст на float для розрахункових колонок."""
+    if is_blank(value):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(" ", "").replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def parse_user_value(header: str, text: str) -> Any:
@@ -193,12 +217,8 @@ class OblikWorkbook:
         ws = wb.create_sheet(name)
         for col, header in enumerate(MAIN_HEADERS, 1):
             ws.cell(1, col, header)
-            ws.cell(2, col, col)
         self._style_header(ws, 1, len(MAIN_HEADERS))
-        for cell in ws[2]:
-            cell.font = Font(bold=True, color="666666")
-            cell.alignment = Alignment(horizontal="center")
-        ws.freeze_panes = "A3"
+        ws.freeze_panes = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(len(MAIN_HEADERS))}1"
         for idx in range(1, len(MAIN_HEADERS) + 1):
             ws.column_dimensions[get_column_letter(idx)].width = 18
@@ -219,8 +239,29 @@ class OblikWorkbook:
         missing = [s for s in REQUIRED_SHEETS if s not in self.wb.sheetnames]
         if missing:
             raise ValueError("У книзі відсутні аркуші: " + ", ".join(missing))
+
+        # Міграція старого шаблону: раніше рядок 2 містив службові числа 1..34.
+        # Тепер дані починаються з рядка 2, щоб № з/п міг бути =ROW()-1.
+        migrated = False
+        for sheet_name in (SHEET_MOVEMENT, SHEET_CURRENT):
+            ws = self.wb[sheet_name]
+            expected = list(range(1, min(ws.max_column, len(MAIN_HEADERS)) + 1))
+            actual = [ws.cell(2, c).value for c in range(1, len(expected) + 1)]
+            normalized = []
+            for value in actual:
+                try:
+                    normalized.append(int(float(value)))
+                except (TypeError, ValueError):
+                    normalized.append(None)
+            if normalized == expected:
+                ws.delete_rows(2, 1)
+                migrated = True
+
+            # Після міграції/відкриття приводимо розрахункові колонки до правил.
+            self._restore_row_formulas(ws)
+
         self.path = path
-        self.dirty = False
+        self.dirty = migrated
 
     def save(self, path: Optional[Path] = None) -> None:
         if self.wb is None:
@@ -240,18 +281,26 @@ class OblikWorkbook:
         end_col = end_col or ws.max_column
         return any(ws.cell(row, c).value not in (None, "") for c in range(start_col, end_col + 1))
 
-    def _first_empty_data_row(self, ws, start_row: int = 3) -> int:
+    def _first_empty_data_row(self, ws, start_row: int = 2) -> int:
         upper = max(ws.max_row + 2, start_row + 2)
         for row in range(start_row, upper + 1):
-            if not self._row_has_data(ws, row, 1, ws.max_column):
+            if not self._row_has_data(ws, row, 2, ws.max_column):
                 return row
         return upper + 1
+
+    def _restore_row_formulas(self, ws) -> None:
+        """Відновлює формули нумерації та суми для всіх непорожніх рядків."""
+        for row in range(2, ws.max_row + 1):
+            if not self._row_has_data(ws, row, 2, ws.max_column):
+                continue
+            ws.cell(row, 1, f"=ROW()-1")
+            ws.cell(row, 18, f"=P{row}*Q{row}")
 
     def dataframe(self, sheet_name: str) -> pd.DataFrame:
         ws = self.wb[sheet_name]
         headers = self.headers(sheet_name)
         rows = []
-        start_row = 3 if sheet_name in (SHEET_MOVEMENT, SHEET_CURRENT) else 2
+        start_row = 2
         for row_no in range(start_row, ws.max_row + 1):
             values = [ws.cell(row_no, col).value for col in range(1, len(headers) + 1)]
             if not any(value not in (None, "") for value in values):
@@ -264,7 +313,7 @@ class OblikWorkbook:
     def append_record(self, sheet_name: str, values: dict[str, Any], reason: str = "") -> int:
         ws = self.wb[sheet_name]
         headers = self.headers(sheet_name)
-        start_row = 3 if sheet_name in (SHEET_MOVEMENT, SHEET_CURRENT) else 2
+        start_row = 2
         row = self._first_empty_data_row(ws, start_row)
         template_row = start_row
 
@@ -275,11 +324,13 @@ class OblikWorkbook:
                 if src.has_style:
                     dst._style = copy(src._style)
 
-        if headers and headers[0] == "№ з/п":
-            values[headers[0]] = self.next_sequence(sheet_name)
-
         for col, header in enumerate(headers, 1):
-            ws.cell(row, col, values.get(header))
+            if header == "№ з/п":
+                ws.cell(row, col, "=ROW()-1")
+            elif header == "Сума":
+                ws.cell(row, col, f"=P{row}*Q{row}")
+            else:
+                ws.cell(row, col, values.get(header))
 
         self.dirty = True
         if sheet_name == SHEET_MOVEMENT:
@@ -293,13 +344,17 @@ class OblikWorkbook:
         changes = []
 
         for i, header in enumerate(headers, 1):
-            if header == "№ з/п":
+            if header in ("№ з/п", "Сума"):
                 continue
             old = old_values.get(header)
             new = new_values.get(header)
             if norm(old) != norm(new):
                 ws.cell(excel_row, i, new)
                 changes.append((header, old, new))
+
+        # Розрахункові колонки ніколи не вводяться вручну.
+        ws.cell(excel_row, 1, "=ROW()-1")
+        ws.cell(excel_row, 18, f"=P{excel_row}*Q{excel_row}")
 
         if changes:
             self.dirty = True
@@ -318,17 +373,6 @@ class OblikWorkbook:
             ws.cell(excel_row, col).value = None
         self.dirty = True
         self._log_change(old_values, sheet_name, "Весь запис", summary, "", "Видалення", reason)
-
-    def next_sequence(self, sheet_name: str) -> int:
-        ws = self.wb[sheet_name]
-        start_row = 3 if sheet_name in (SHEET_MOVEMENT, SHEET_CURRENT) else 2
-        values = []
-        for row in range(start_row, ws.max_row + 1):
-            try:
-                values.append(int(ws.cell(row, 1).value))
-            except (TypeError, ValueError):
-                pass
-        return max(values, default=0) + 1
 
     def _record_summary(self, values: dict[str, Any]) -> str:
         keys = [MAIN_HEADERS[9], MAIN_HEADERS[18], MAIN_HEADERS[12], MAIN_HEADERS[16], MAIN_HEADERS[19], MAIN_HEADERS[20]]
@@ -491,28 +535,31 @@ class OblikWorkbook:
                 if not inv and not serial:
                     preserved_rows.append({h: current_row.get(h) for h in headers})
 
-        for row in range(3, ws_cur.max_row + 1):
+        for row in range(2, ws_cur.max_row + 1):
             for col in range(1, min(len(headers), ws_cur.max_column) + 1):
                 ws_cur.cell(row, col).value = None
 
-        out_row = 3
-        sequence = 1
+        out_row = 2
         for _, record in latest.iterrows():
             for col, header in enumerate(headers, 1):
-                value = record.get(header)
                 if header == "№ з/п":
-                    value = sequence
+                    value = "=ROW()-1"
+                elif header == "Сума":
+                    value = f"=P{out_row}*Q{out_row}"
+                else:
+                    value = record.get(header)
                 ws_cur.cell(out_row, col, value)
-            sequence += 1
             out_row += 1
 
         for record in preserved_rows:
             for col, header in enumerate(headers, 1):
-                value = record.get(header)
                 if header == "№ з/п":
-                    value = sequence
+                    value = "=ROW()-1"
+                elif header == "Сума":
+                    value = f"=P{out_row}*Q{out_row}"
+                else:
+                    value = record.get(header)
                 ws_cur.cell(out_row, col, value)
-            sequence += 1
             out_row += 1
 
         self.dirty = True
@@ -554,6 +601,10 @@ class RecordDialog(QDialog):
                 widget = QTextEdit()
                 widget.setMaximumHeight(90)
                 widget.setPlainText(display_value(current))
+            elif header == "Сума":
+                widget = QLineEdit()
+                widget.setReadOnly(True)
+                widget.setPlaceholderText("Розраховується автоматично")
             else:
                 widget = QLineEdit(display_value(current))
                 if "дата" in header.casefold():
@@ -561,6 +612,13 @@ class RecordDialog(QDialog):
 
             self.inputs[header] = widget
             form.addRow(label, widget)
+
+        price_widget = self.inputs.get("Ціна")
+        qty_widget = self.inputs.get("Кількість")
+        if isinstance(price_widget, QLineEdit) and isinstance(qty_widget, QLineEdit):
+            price_widget.textChanged.connect(self._refresh_sum)
+            qty_widget.textChanged.connect(self._refresh_sum)
+            self._refresh_sum()
 
         from PySide6.QtWidgets import QScrollArea
         scroll = QScrollArea()
@@ -577,6 +635,23 @@ class RecordDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+
+    def _refresh_sum(self):
+        sum_widget = self.inputs.get("Сума")
+        price_widget = self.inputs.get("Ціна")
+        qty_widget = self.inputs.get("Кількість")
+        if not isinstance(sum_widget, QLineEdit):
+            return
+        if not isinstance(price_widget, QLineEdit) or not isinstance(qty_widget, QLineEdit):
+            sum_widget.clear()
+            return
+        price = numeric_value(price_widget.text())
+        qty = numeric_value(qty_widget.text())
+        if price is None or qty is None:
+            sum_widget.clear()
+        else:
+            result = price * qty
+            sum_widget.setText(f"{result:.2f}")
 
     def data(self):
         out = {}
@@ -771,15 +846,16 @@ class MainWindow(QMainWindow):
 
         df = self.model.dataframe(self.current_sheet)
         headers = self.model.headers(self.current_sheet)
-        self.table.setColumnCount(len(headers))
-        self.table.setHorizontalHeaderLabels([header.replace("\n", " ") for header in headers])
+        visible_headers = [h for h in headers if h != "№ з/п"]
+        self.table.setColumnCount(len(visible_headers))
+        self.table.setHorizontalHeaderLabels([header.replace("\n", " ") for header in visible_headers])
 
         if df.empty:
             self.table.setRowCount(0)
             self._update_edit_permissions()
             return
 
-        data_headers = [c for c in df.columns if c != "_excel_row"]
+        data_headers = [c for c in df.columns if c not in ("_excel_row", "№ з/п")]
         self.table.setRowCount(len(df))
         duplicate_map = self.model.duplicate_map() if self.current_sheet == SHEET_MOVEMENT else {}
 
@@ -787,7 +863,13 @@ class MainWindow(QMainWindow):
             excel_row = int(row["_excel_row"])
             dup = duplicate_map.get(excel_row, DuplicateInfo())
             for c_idx, header in enumerate(data_headers):
-                item = QTableWidgetItem(display_value(row.get(header)))
+                if header == "Сума":
+                    price = numeric_value(row.get("Ціна"))
+                    qty = numeric_value(row.get("Кількість"))
+                    value = "" if price is None or qty is None else f"{price * qty:.2f}"
+                else:
+                    value = display_value(row.get(header))
+                item = QTableWidgetItem(value)
                 item.setData(Qt.UserRole, excel_row)
                 if self.current_sheet == SHEET_MOVEMENT:
                     if dup.score >= 5:
