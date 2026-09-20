@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -637,9 +637,13 @@ class RecordDialog(QDialog):
         reverse_layout.addWidget(reverse_text)
         reverse_layout.addStretch(1)
 
-        for header in headers:
-            if header == "№ з/п":
-                continue
+        display_headers = [h for h in headers if h != "№ з/п"]
+        if "Ціна" in display_headers and "Кількість" in display_headers:
+            display_headers.remove("Кількість")
+            price_index = display_headers.index("Ціна")
+            display_headers.insert(price_index, "Кількість")
+
+        for header in display_headers:
             current = values.get(header) if values else None
             label = QLabel(header.replace("\n", " "))
             label.setWordWrap(True)
