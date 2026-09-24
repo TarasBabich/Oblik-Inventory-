@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore)
 import pandas as pd
 
 
@@ -34,6 +34,21 @@ def main():
 
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "test.xlsx"
+        settings = AppSettingsStore()
+        settings.path = Path(tmp) / "oblik_settings.json"
+        saved_path = settings.save({
+            "unit_number": "А1234",
+            "commander_rank": "полковник",
+            "commander_name": "Тестовий Командир",
+            "document_start_number": "25",
+        })
+        loaded_settings = settings.load()
+        assert saved_path.exists()
+        assert loaded_settings["unit_number"] == "А1234"
+        assert loaded_settings["commander_rank"] == "полковник"
+        assert loaded_settings["commander_name"] == "Тестовий Командир"
+        assert loaded_settings["document_start_number"] == "25"
+
         model = OblikWorkbook()
         model.create_new(path)
 
