@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================================
-echo Oblik Inventory - Windows EXE build
+echo Oblik Inventory - Flet Windows EXE build
 echo ============================================================
 
 where py >nul 2>nul
@@ -27,14 +27,13 @@ if errorlevel 1 goto :error
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-".venv\Scripts\python.exe" -m PyInstaller ^
-  --noconfirm ^
-  --clean ^
-  --onefile ^
-  --windowed ^
+".venv\Scripts\flet.exe" pack ^
+  --yes ^
   --name Oblik ^
-  --collect-all PySide6 ^
-  --collect-all pandas ^
+  --distpath dist ^
+  --product-name "Oblik Inventory" ^
+  --product-version 0.2.0 ^
+  --file-version 0.2.0.0 ^
   src\main.py
 if errorlevel 1 goto :error
 
