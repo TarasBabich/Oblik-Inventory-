@@ -22,7 +22,7 @@ import getpass
 import json
 import sys
 from collections import defaultdict
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +61,10 @@ DEFAULT_APP_SETTINGS = {
     "finance_chief_name": "",
     "document_prefix": "",
     "document_start_number": "1",
+    "commission_chair_position": "",
+    "commission_chair_rank": "",
+    "commission_chair_name": "",
+    "commission_members": [],
 }
 
 MAIN_HEADERS = [
@@ -616,15 +620,28 @@ class AppSettingsStore:
         )
         self.path = base / "oblik_settings.json"
 
-    def load(self) -> dict[str, str]:
-        values = dict(DEFAULT_APP_SETTINGS)
+    def load(self) -> dict[str, Any]:
+        values = deepcopy(DEFAULT_APP_SETTINGS)
         if not self.path.exists():
             return values
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 for key in values:
-                    if key in loaded and loaded[key] is not None:
+                    if key == "commission_members":
+                        members = loaded.get(key, [])
+                        if isinstance(members, list):
+                            cleaned = []
+                            for member in members:
+                                if not isinstance(member, dict):
+                                    continue
+                                cleaned.append({
+                                    "position": str(member.get("position", "") or "").strip(),
+                                    "rank": str(member.get("rank", "") or "").strip(),
+                                    "name": str(member.get("name", "") or "").strip(),
+                                })
+                            values[key] = cleaned
+                    elif key in loaded and loaded[key] is not None:
                         values[key] = str(loaded[key])
         except (OSError, json.JSONDecodeError):
             # Пошкоджені налаштування не повинні блокувати запуск програми.
@@ -632,10 +649,24 @@ class AppSettingsStore:
         return values
 
     def save(self, values: dict[str, Any]) -> Path:
-        data = dict(DEFAULT_APP_SETTINGS)
+        data = deepcopy(DEFAULT_APP_SETTINGS)
         for key in data:
-            value = values.get(key, "")
-            data[key] = "" if value is None else str(value).strip()
+            if key == "commission_members":
+                members = values.get(key, [])
+                cleaned = []
+                if isinstance(members, list):
+                    for member in members:
+                        if not isinstance(member, dict):
+                            continue
+                        cleaned.append({
+                            "position": str(member.get("position", "") or "").strip(),
+                            "rank": str(member.get("rank", "") or "").strip(),
+                            "name": str(member.get("name", "") or "").strip(),
+                        })
+                data[key] = cleaned
+            else:
+                value = values.get(key, "")
+                data[key] = "" if value is None else str(value).strip()
         self.path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -655,6 +686,7 @@ class FletOblikApp:
         self.settings_store = AppSettingsStore()
         self.settings = self.settings_store.load()
         self.settings_fields: dict[str, ft.TextField] = {}
+        self.commission_member_entries: list[dict[str, Any]] = []
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -1053,11 +1085,136 @@ class FletOblikApp:
             ],
         )
 
+        self.commission_member_entries = []
+        commission_members_host = ft.Column(spacing=10)
+
+        def refresh_member_titles():
+            for index, entry in enumerate(self.commission_member_entries, start=1):
+                entry["title"].value = f"Член комісії №{index}"
+
+        def add_commission_member(e=None, member=None):
+            member = member if isinstance(member, dict) else {}
+            position = ft.TextField(
+                label="Посада",
+                value=str(member.get("position", "") or ""),
+                expand=2,
+            )
+            rank = ft.TextField(
+                label="Військове звання",
+                value=str(member.get("rank", "") or ""),
+                expand=1,
+            )
+            name = ft.TextField(
+                label="ПІБ",
+                value=str(member.get("name", "") or ""),
+                expand=2,
+            )
+            title = ft.Text(
+                "Член комісії",
+                weight=ft.FontWeight.W_600,
+                color=ft.Colors.BLUE_GREY_700,
+            )
+            entry: dict[str, Any] = {
+                "position": position,
+                "rank": rank,
+                "name": name,
+                "title": title,
+            }
+
+            def remove_member(evt=None):
+                if entry in self.commission_member_entries:
+                    self.commission_member_entries.remove(entry)
+                if entry["container"] in commission_members_host.controls:
+                    commission_members_host.controls.remove(entry["container"])
+                refresh_member_titles()
+                self.page.update()
+
+            container = ft.Container(
+                padding=12,
+                bgcolor=ft.Colors.BLUE_GREY_50,
+                border_radius=10,
+                content=ft.Column(
+                    controls=[
+                        ft.Row(
+                            controls=[
+                                title,
+                                ft.Container(expand=True),
+                                ft.IconButton(
+                                    icon=ft.Icons.DELETE_OUTLINE,
+                                    tooltip="Видалити члена комісії",
+                                    on_click=remove_member,
+                                ),
+                            ]
+                        ),
+                        ft.Row(
+                            controls=[position, rank, name],
+                            spacing=8,
+                        ),
+                    ],
+                    spacing=8,
+                ),
+            )
+            entry["container"] = container
+            self.commission_member_entries.append(entry)
+            commission_members_host.controls.append(container)
+            refresh_member_titles()
+            if e is not None:
+                self.page.update()
+
+        existing_members = self.settings.get("commission_members", [])
+        if isinstance(existing_members, list):
+            for member in existing_members:
+                add_commission_member(member=member)
+
+        commission_card = self._settings_card(
+            "Комісія",
+            "Голова комісії та довільна кількість членів. Склад комісії можна змінювати без обмеження кількості.",
+            [
+                ft.Text(
+                    "Голова комісії",
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.Colors.BLUE_GREY_800,
+                ),
+                self._settings_field("commission_chair_position", "Посада голови комісії"),
+                self._settings_field("commission_chair_rank", "Військове звання голови"),
+                self._settings_field("commission_chair_name", "ПІБ голови комісії"),
+                ft.Divider(),
+                ft.Row(
+                    controls=[
+                        ft.Text(
+                            "Члени комісії",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Container(expand=True),
+                        ft.Button(
+                            content="+ Додати члена комісії",
+                            icon=ft.Icons.PERSON_ADD,
+                            on_click=add_commission_member,
+                        ),
+                    ]
+                ),
+                commission_members_host,
+            ],
+        )
+
         def save_settings(e=None):
             values = {
                 key: field.value or ""
                 for key, field in self.settings_fields.items()
             }
+            values["commission_members"] = [
+                {
+                    "position": entry["position"].value or "",
+                    "rank": entry["rank"].value or "",
+                    "name": entry["name"].value or "",
+                }
+                for entry in self.commission_member_entries
+                if any([
+                    (entry["position"].value or "").strip(),
+                    (entry["rank"].value or "").strip(),
+                    (entry["name"].value or "").strip(),
+                ])
+            ]
             try:
                 path = self.settings_store.save(values)
                 self.settings = self.settings_store.load()
@@ -1087,6 +1244,7 @@ class FletOblikApp:
                         commander_card,
                         service_card,
                         finance_card,
+                        commission_card,
                         numbering_card,
                         ft.Row(
                             alignment=ft.MainAxisAlignment.END,
