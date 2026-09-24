@@ -26,13 +26,17 @@ jobs:
         run: |
           python tests/smoke_test.py
 
-      - name: Build Oblik.exe
+      - name: Import Flet UI
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name Oblik src/main.py
+          python -c "import src.main; print('FLET UI IMPORT OK')"
+
+      - name: Build Oblik.exe with Flet
+        run: |
+          flet pack --yes --name Oblik --distpath dist --product-name "Oblik Inventory" --product-version 0.2.0 --file-version 0.2.0.0 src/main.py
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: Oblik-Windows
+          name: Oblik-Windows-Flet
           path: dist/Oblik.exe
           if-no-files-found: error
