@@ -41,6 +41,13 @@ def main():
             "commander_rank": "полковник",
             "commander_name": "Тестовий Командир",
             "document_start_number": "25",
+            "commission_chair_position": "Начальник служби",
+            "commission_chair_rank": "майор",
+            "commission_chair_name": "Голова Комісії",
+            "commission_members": [
+                {"position": "Офіцер", "rank": "капітан", "name": "Член Один"},
+                {"position": "Інженер", "rank": "старший лейтенант", "name": "Член Два"},
+            ],
         })
         loaded_settings = settings.load()
         assert saved_path.exists()
@@ -48,6 +55,9 @@ def main():
         assert loaded_settings["commander_rank"] == "полковник"
         assert loaded_settings["commander_name"] == "Тестовий Командир"
         assert loaded_settings["document_start_number"] == "25"
+        assert loaded_settings["commission_chair_name"] == "Голова Комісії"
+        assert len(loaded_settings["commission_members"]) == 2
+        assert loaded_settings["commission_members"][1]["name"] == "Член Два"
 
         model = OblikWorkbook()
         model.create_new(path)
