@@ -8,7 +8,7 @@ Oblik Inventory
 - Excel залишається зрозумілим користувачу носієм/експортом.
 - pandas використовується для аналізу даних.
 - openpyxl використовується для читання/запису Excel зі збереженням структури.
-- PySide6 забезпечує Windows-інтерфейс.
+- Flet забезпечує сучасний desktop-інтерфейс.
 - зміни НЕ блокуються: програма попереджає і журналює їх;
 - "Штатна потреба" не перераховується і переноситься як є;
 - "Поточний стан" автоматично перебудовується тільки для поштучного майна,
@@ -32,18 +32,10 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QFont
-from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-    QMainWindow, QMessageBox, QPushButton, QSplitter, QStatusBar,
-    QTableWidget, QTableWidgetItem, QTextEdit, QToolBar, QVBoxLayout, QWidget,
-    QStackedWidget,
-)
+import flet as ft
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.2.0"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -590,550 +582,941 @@ class OblikWorkbook:
         return len(latest), skipped
 
 
-class RecordDialog(QDialog):
-    """Діалог усіх полів одного запису."""
 
-    def __init__(self, headers, values=None, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Запис майна")
-        self.resize(760, 760)
-        self.inputs = {}
-        self.reverse_calc_mode = False
-        self.calculated_price: Optional[float] = None
-        self.calculated_sum: Optional[float] = None
-
-        outer = QVBoxLayout(self)
-        scroll_host = QWidget()
-        form = QFormLayout(scroll_host)
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignTop)
-
-        self.price_edit = QLineEdit(display_value(values.get("Ціна") if values else None))
-        self.price_label = QLabel("—")
-        self.price_label.setStyleSheet("font-weight: 600; padding: 7px 10px;")
-        self.price_stack = QStackedWidget()
-        self.price_stack.addWidget(self.price_edit)
-        self.price_stack.addWidget(self.price_label)
-
-        self.sum_label = QLabel("—")
-        self.sum_label.setStyleSheet("font-weight: 600; padding: 7px 10px;")
-        self.sum_edit = QLineEdit()
-        self.sum_edit.setPlaceholderText("Введіть загальну вартість")
-        self.sum_stack = QStackedWidget()
-        self.sum_stack.addWidget(self.sum_label)
-        self.sum_stack.addWidget(self.sum_edit)
-
-        self.reverse_button = QPushButton("⟳")
-        self.reverse_button.setCheckable(True)
-        self.reverse_button.setFixedWidth(44)
-        self.reverse_button.setToolTip("Перемкнути: розрахувати ціну із загальної суми")
-        self.reverse_button.toggled.connect(self._set_reverse_calc_mode)
-
-        reverse_host = QWidget()
-        reverse_layout = QHBoxLayout(reverse_host)
-        reverse_layout.setContentsMargins(0, 0, 0, 0)
-        reverse_layout.addWidget(self.reverse_button)
-        reverse_text = QLabel("Розрахунок від суми")
-        reverse_text.setStyleSheet("font-weight: 600;")
-        reverse_layout.addWidget(reverse_text)
-        reverse_layout.addStretch(1)
-
-        display_headers = [h for h in headers if h != "№ з/п"]
-        if "Ціна" in display_headers and "Кількість" in display_headers:
-            display_headers.remove("Кількість")
-            price_index = display_headers.index("Ціна")
-            display_headers.insert(price_index, "Кількість")
-
-        for header in display_headers:
-            current = values.get(header) if values else None
-            label = QLabel(header.replace("\n", " "))
-            label.setWordWrap(True)
-
-            if header == MAIN_HEADERS[8]:
-                widget = QComboBox()
-                widget.setEditable(True)
-                widget.addItems(["", "Необоротний актив", "Запас"])
-                widget.setCurrentText(display_value(current))
-            elif header == MAIN_HEADERS[23]:
-                widget = QComboBox()
-                widget.setEditable(True)
-                widget.addItems(["", "Справний", "Несправний", "Переданий в ремонт", "Знищений", "Втрачений"])
-                widget.setCurrentText(display_value(current))
-            elif header == "Примітка":
-                widget = QTextEdit()
-                widget.setMaximumHeight(90)
-                widget.setPlainText(display_value(current))
-            elif header == "Ціна":
-                widget = self.price_stack
-            elif header == "Сума":
-                widget = self.sum_stack
-            else:
-                widget = QLineEdit(display_value(current))
-                if "дата" in header.casefold():
-                    widget.setPlaceholderText("дд.мм.рррр")
-
-            self.inputs[header] = widget
-            form.addRow(label, widget)
-
-            if header == "Кількість":
-                form.addRow(QLabel(""), reverse_host)
-
-        qty_widget = self.inputs.get("Кількість")
-        if isinstance(qty_widget, QLineEdit):
-            qty_widget.textChanged.connect(self._refresh_calculation)
-        self.price_edit.textChanged.connect(self._refresh_calculation)
-        self.sum_edit.textChanged.connect(self._refresh_calculation)
-        self._refresh_calculation()
-
-        from PySide6.QtWidgets import QScrollArea
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(scroll_host)
-        outer.addWidget(scroll)
-
-        self.reason = QLineEdit()
-        self.reason.setPlaceholderText("Причина зміни / уточнення (за потреби)")
-        outer.addWidget(QLabel("Причина зміни:"))
-        outer.addWidget(self.reason)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
-
-    def _set_reverse_calc_mode(self, checked: bool):
-        """Перемикає джерело розрахунку: ціна або загальна сума."""
-        if checked == self.reverse_calc_mode:
-            return
-
-        # При поверненні у звичайний режим переносимо розраховану ціну
-        # у поле вводу, щоб користувач не втратив результат.
-        if self.reverse_calc_mode and not checked:
-            if self.calculated_price is not None:
-                self.price_edit.setText(str(self.calculated_price))
-
-        # При вході у режим "від суми" підставляємо поточну розраховану суму.
-        if not self.reverse_calc_mode and checked and not self.sum_edit.text().strip():
-            if self.calculated_sum is not None:
-                self.sum_edit.setText(str(self.calculated_sum))
-
-        self.reverse_calc_mode = checked
-        self.price_stack.setCurrentIndex(1 if checked else 0)
-        self.sum_stack.setCurrentIndex(1 if checked else 0)
-        self._refresh_calculation()
-
-    def _refresh_calculation(self):
-        qty_widget = self.inputs.get("Кількість")
-        qty = numeric_value(qty_widget.text()) if isinstance(qty_widget, QLineEdit) else None
-
-        if self.reverse_calc_mode:
-            self.calculated_price = calculate_unit_price(self.sum_edit.text(), qty)
-            self.calculated_sum = numeric_value(self.sum_edit.text())
-            self.price_label.setText(format_decimal(self.calculated_price, 5))
-        else:
-            self.calculated_price = numeric_value(self.price_edit.text())
-            self.calculated_sum = calculate_total(self.price_edit.text(), qty)
-            self.sum_label.setText(format_decimal(self.calculated_sum, 2))
-
-    def accept(self):
-        if self.reverse_calc_mode:
-            total = numeric_value(self.sum_edit.text())
-            qty_widget = self.inputs.get("Кількість")
-            qty = numeric_value(qty_widget.text()) if isinstance(qty_widget, QLineEdit) else None
-            if total is not None and (qty is None or qty == 0):
-                QMessageBox.warning(
-                    self,
-                    "Неможливо розрахувати ціну",
-                    "Для розрахунку ціни від суми потрібно вказати кількість, більшу за нуль.",
-                )
-                return
-        super().accept()
-
-    def data(self):
-        out = {}
-        for header, widget in self.inputs.items():
-            if header == "Ціна":
-                if self.reverse_calc_mode:
-                    out[header] = self.calculated_price
-                else:
-                    out[header] = parse_user_value(header, self.price_edit.text())
-                continue
-
-            if header == "Сума":
-                if self.reverse_calc_mode:
-                    out[header] = numeric_value(self.sum_edit.text())
-                else:
-                    out[header] = self.calculated_sum
-                continue
-
-            if isinstance(widget, QComboBox):
-                text = widget.currentText()
-            elif isinstance(widget, QTextEdit):
-                text = widget.toPlainText()
-            elif isinstance(widget, QLineEdit):
-                text = widget.text()
-            else:
-                text = ""
-            out[header] = parse_user_value(header, text)
-        return out
+MAX_TABLE_ROWS = 250
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
+class FletOblikApp:
+    """Flet-інтерфейс. Облікова логіка лишається в OblikWorkbook."""
+
+    def __init__(self, page: ft.Page):
+        self.page = page
         self.model = OblikWorkbook()
         self.current_sheet = SHEET_MOVEMENT
-        self.setWindowTitle(f"{APP_TITLE} {APP_VERSION}")
-        self.resize(1500, 900)
-        self._build_ui()
-        self._apply_style()
+        self.selected_excel_row: Optional[int] = None
+        self.file_picker = ft.FilePicker()
 
-    def _build_ui(self):
-        toolbar = QToolBar("Основні дії")
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
+        self.page.title = f"{APP_TITLE} {APP_VERSION}"
+        self.page.theme_mode = ft.ThemeMode.LIGHT
+        self.page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE)
+        self.page.padding = 0
+        self.page.spacing = 0
+        self.page.window.width = 1500
+        self.page.window.height = 900
+        self.page.window.min_width = 1000
+        self.page.window.min_height = 650
 
-        actions = [
-            ("Відкрити Excel", self.open_file),
-            ("Нова книга", self.new_file),
-            ("Зберегти", self.save_file),
-            ("Зберегти як", self.save_as),
+        self.status = ft.Text(
+            "Відкрийте існуючу книгу або створіть нову",
+            size=12,
+            color=ft.Colors.BLUE_GREY_700,
+        )
+        self.file_label = ft.Text("Файл не відкрито", weight=ft.FontWeight.W_600)
+        self.search = ft.TextField(
+            hint_text="Пошук у відкритій таблиці…",
+            prefix_icon=ft.Icons.SEARCH,
+            on_change=self._search_changed,
+            expand=True,
+        )
+        self.table_host = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
+
+        self.btn_add = ft.Button(
+            content="+ Додати запис",
+            icon=ft.Icons.ADD,
+            on_click=self._add_record,
+            disabled=True,
+        )
+        self.btn_edit = ft.Button(
+            content="Редагувати",
+            icon=ft.Icons.EDIT,
+            on_click=self._edit_record,
+            disabled=True,
+        )
+        self.btn_delete = ft.Button(
+            content="Видалити",
+            icon=ft.Icons.DELETE_OUTLINE,
+            on_click=self._delete_record,
+            disabled=True,
+        )
+
+        self.sheet_buttons: dict[str, ft.Button] = {}
+        self._build_page()
+        self._autoload_default_book()
+
+    def _build_page(self):
+        toolbar = ft.Container(
+            bgcolor=ft.Colors.BLUE_GREY_900,
+            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+            content=ft.Row(
+                controls=[
+                    ft.Text(
+                        "OBLIK",
+                        size=20,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.WHITE,
+                    ),
+                    ft.VerticalDivider(color=ft.Colors.WHITE24),
+                    ft.Button(
+                        content="Відкрити Excel",
+                        icon=ft.Icons.FOLDER_OPEN,
+                        on_click=self._open_file,
+                    ),
+                    ft.Button(
+                        content="Нова книга",
+                        icon=ft.Icons.NOTE_ADD,
+                        on_click=self._new_file,
+                    ),
+                    ft.Button(
+                        content="Зберегти",
+                        icon=ft.Icons.SAVE,
+                        on_click=self._save_file,
+                    ),
+                    ft.Button(
+                        content="Зберегти як",
+                        icon=ft.Icons.SAVE_AS,
+                        on_click=self._save_as,
+                    ),
+                    ft.Button(
+                        content="Оновити поточний стан",
+                        icon=ft.Icons.REFRESH,
+                        on_click=self._rebuild_current,
+                    ),
+                    ft.Container(expand=True),
+                    ft.Text(f"v{APP_VERSION}", color=ft.Colors.WHITE70),
+                ],
+            ),
+        )
+
+        nav_controls = [
+            ft.Text(
+                "РОЗДІЛИ",
+                size=11,
+                weight=ft.FontWeight.BOLD,
+                color=ft.Colors.BLUE_GREY_400,
+            )
         ]
-        for title, handler in actions:
-            action = QAction(title, self)
-            action.triggered.connect(handler)
-            toolbar.addAction(action)
+        for sheet in REQUIRED_SHEETS:
+            button = ft.Button(
+                content=sheet,
+                data=sheet,
+                on_click=self._select_sheet,
+                width=205,
+            )
+            self.sheet_buttons[sheet] = button
+            nav_controls.append(button)
 
-        toolbar.addSeparator()
-        rebuild = QAction("Оновити поточний стан", self)
-        rebuild.triggered.connect(self.rebuild_current)
-        toolbar.addAction(rebuild)
+        sidebar = ft.Container(
+            width=230,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            padding=16,
+            content=ft.Column(
+                controls=nav_controls,
+                spacing=8,
+            ),
+        )
 
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        top = QHBoxLayout()
+        action_bar = ft.Row(
+            controls=[
+                self.search,
+                self.btn_add,
+                self.btn_edit,
+                self.btn_delete,
+            ],
+            spacing=8,
+        )
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Пошук у відкритій таблиці…")
-        self.search.textChanged.connect(self.apply_filter)
-        top.addWidget(QLabel("Пошук:"))
-        top.addWidget(self.search, 1)
+        main_panel = ft.Container(
+            expand=True,
+            padding=16,
+            content=ft.Column(
+                expand=True,
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Column(
+                                controls=[
+                                    ft.Text(
+                                        self.current_sheet,
+                                        key="sheet_title",
+                                        size=23,
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    self.file_label,
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                        ]
+                    ),
+                    action_bar,
+                    ft.Divider(height=1),
+                    self.table_host,
+                    ft.Divider(height=1),
+                    self.status,
+                ],
+            ),
+        )
+        self.sheet_title = main_panel.content.controls[0].controls[0].controls[0]
 
-        self.btn_add = QPushButton("+ Додати запис")
-        self.btn_add.clicked.connect(self.add_record)
-        self.btn_edit = QPushButton("Редагувати")
-        self.btn_edit.clicked.connect(self.edit_record)
-        self.btn_delete = QPushButton("Видалити")
-        self.btn_delete.clicked.connect(self.delete_record)
-        top.addWidget(self.btn_add)
-        top.addWidget(self.btn_edit)
-        top.addWidget(self.btn_delete)
-        layout.addLayout(top)
+        body = ft.Row(
+            expand=True,
+            spacing=0,
+            controls=[sidebar, ft.VerticalDivider(width=1), main_panel],
+        )
+        self.page.add(
+            ft.Column(
+                expand=True,
+                spacing=0,
+                controls=[toolbar, body],
+            )
+        )
+        self._refresh_table()
 
-        splitter = QSplitter()
-        self.sidebar = QListWidget()
-        self.sidebar.addItems(REQUIRED_SHEETS)
-        self.sidebar.setMaximumWidth(220)
-        self.sidebar.currentTextChanged.connect(self.select_sheet)
-        self.sidebar.setCurrentRow(1)
-        splitter.addWidget(self.sidebar)
+    def _autoload_default_book(self):
+        base = (
+            Path(sys.executable).parent
+            if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parent.parent
+        )
+        for candidate in (base / "Oblik.xlsx", base / "data" / "Oblik.xlsx"):
+            if candidate.exists():
+                try:
+                    self.model.load(candidate)
+                    self._set_status(f"Автоматично відкрито: {candidate}")
+                    self._refresh_table()
+                except Exception as exc:
+                    self._show_message("Помилка відкриття", str(exc))
+                break
 
-        self.table = QTableWidget()
-        self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.doubleClicked.connect(self.edit_record)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.table.horizontalHeader().setDefaultSectionSize(160)
-        splitter.addWidget(self.table)
-        splitter.setStretchFactor(1, 1)
-        layout.addWidget(splitter, 1)
+    def _set_status(self, text: str):
+        self.status.value = text
+        self.page.update()
 
-        self.setCentralWidget(root)
-        self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("Відкрийте існуючу книгу або створіть нову")
-        self._update_edit_permissions()
+    def _show_message(self, title: str, message: str):
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(title),
+            content=ft.Text(message),
+            actions=[
+                ft.TextButton("OK", on_click=lambda e: self.page.pop_dialog())
+            ],
+        )
+        self.page.show_dialog(dialog)
 
-    def _apply_style(self):
-        self.setStyleSheet("""
-            QMainWindow { background: #f4f6f8; }
-            QToolBar { background: #17365d; color: white; spacing: 8px; padding: 5px; }
-            QToolButton { color: white; padding: 6px 10px; }
-            QListWidget { background: #203864; color: white; border: none; font-size: 14px; }
-            QListWidget::item { padding: 13px 12px; }
-            QListWidget::item:selected { background: #2f75b5; font-weight: bold; }
-            QPushButton { padding: 7px 12px; border-radius: 4px; background: #2f75b5; color: white; }
-            QPushButton:disabled { background: #aab4be; }
-            QLineEdit, QComboBox, QTextEdit { padding: 6px; background: white; border: 1px solid #c7cdd4; border-radius: 3px; }
-            QTableWidget { background: white; gridline-color: #dde2e7; }
-            QHeaderView::section { background: #d9eaf7; padding: 6px; border: 1px solid #b8c9d8; font-weight: bold; }
-        """)
-
-    def _maybe_save(self):
-        if not self.model.dirty:
-            return True
-        answer = QMessageBox.question(self, "Незбережені зміни", "Зберегти зміни перед продовженням?", QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-        if answer == QMessageBox.Cancel:
-            return False
-        if answer == QMessageBox.Yes:
-            self.save_file()
-            return not self.model.dirty
-        return True
-
-    def open_file(self):
-        if not self._maybe_save():
-            return
-        path, _ = QFileDialog.getOpenFileName(self, "Відкрити книгу обліку", "", "Excel (*.xlsx *.xlsm)")
-        if not path:
-            return
+    async def _open_file(self, e=None):
         try:
-            self.model.load(Path(path))
-            self.refresh_table()
-            self.statusBar().showMessage(f"Відкрито: {path}")
+            files = await self.file_picker.pick_files(
+                dialog_title="Відкрити книгу обліку",
+                allow_multiple=False,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx", "xlsm"],
+            )
+            if not files:
+                return
+            selected = files[0]
+            if not selected.path:
+                self._show_message(
+                    "Файл недоступний",
+                    "Не вдалося отримати локальний шлях до вибраного файлу.",
+                )
+                return
+            self.model.load(Path(selected.path))
+            self.selected_excel_row = None
+            self._set_status(f"Відкрито: {selected.path}")
+            self._refresh_table()
         except Exception as exc:
-            QMessageBox.critical(self, "Помилка", str(exc))
+            self._show_message("Помилка відкриття", str(exc))
 
-    def new_file(self):
-        if not self._maybe_save():
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "Створити книгу", "Oblik.xlsx", "Excel (*.xlsx)")
-        if not path:
-            return
-        if not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
+    async def _new_file(self, e=None):
         try:
+            path = await self.file_picker.save_file(
+                dialog_title="Створити книгу",
+                file_name="Oblik.xlsx",
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx"],
+            )
+            if not path:
+                return
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
             self.model.create_new(Path(path))
-            self.refresh_table()
+            self.current_sheet = SHEET_MOVEMENT
+            self.selected_excel_row = None
+            self._set_status(f"Створено: {path}")
+            self._refresh_table()
         except Exception as exc:
-            QMessageBox.critical(self, "Помилка", str(exc))
+            self._show_message("Помилка створення", str(exc))
 
-    def save_file(self):
+    def _save_file(self, e=None):
         if self.model.wb is None:
+            self._show_message("Збереження", "Спочатку відкрийте або створіть книгу.")
             return
         try:
             self.model.save()
-            self.statusBar().showMessage(f"Збережено: {self.model.path}", 5000)
+            self._set_status(f"Збережено: {self.model.path}")
         except PermissionError:
-            QMessageBox.warning(self, "Файл зайнятий", "Закрийте книгу в Excel і повторіть.")
+            self._show_message(
+                "Файл зайнятий",
+                "Закрийте книгу в Excel і повторіть збереження.",
+            )
         except Exception as exc:
-            QMessageBox.critical(self, "Помилка збереження", str(exc))
+            self._show_message("Помилка збереження", str(exc))
 
-    def save_as(self):
+    async def _save_as(self, e=None):
         if self.model.wb is None:
+            self._show_message("Збереження", "Спочатку відкрийте або створіть книгу.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Зберегти копію", "Oblik_copy.xlsx", "Excel (*.xlsx)")
-        if not path:
-            return
-        if not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
         try:
+            path = await self.file_picker.save_file(
+                dialog_title="Зберегти копію",
+                file_name="Oblik_copy.xlsx",
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx"],
+            )
+            if not path:
+                return
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
             self.model.save(Path(path))
-            self.refresh_table()
+            self._set_status(f"Збережено копію: {path}")
+            self._refresh_table()
         except Exception as exc:
-            QMessageBox.critical(self, "Помилка", str(exc))
+            self._show_message("Помилка збереження", str(exc))
 
-    def select_sheet(self, name):
-        if not name:
+    def _select_sheet(self, e):
+        sheet = e.control.data
+        if not sheet:
             return
-        self.current_sheet = name
-        self.search.clear()
-        self.refresh_table()
-        self._update_edit_permissions()
+        self.current_sheet = sheet
+        self.selected_excel_row = None
+        self.search.value = ""
+        self.sheet_title.value = sheet
+        self._refresh_table()
+
+    def _search_changed(self, e=None):
+        self.selected_excel_row = None
+        self._refresh_table()
 
     def _update_edit_permissions(self):
-        editable = self.current_sheet == SHEET_MOVEMENT
-        enabled = editable and self.model.wb is not None
-        self.btn_add.setEnabled(enabled)
-        self.btn_edit.setEnabled(enabled)
-        self.btn_delete.setEnabled(enabled)
+        editable = self.current_sheet == SHEET_MOVEMENT and self.model.wb is not None
+        self.btn_add.disabled = not editable
+        selected = editable and self.selected_excel_row is not None
+        self.btn_edit.disabled = not selected
+        self.btn_delete.disabled = not selected
 
-    def refresh_table(self):
-        self.table.clear()
+    def _refresh_table(self):
+        self.table_host.controls.clear()
+        self.sheet_title.value = self.current_sheet
+        self.file_label.value = (
+            str(self.model.path) if self.model.path else "Файл не відкрито"
+        )
+
         if self.model.wb is None or self.current_sheet not in self.model.wb.sheetnames:
-            self.table.setRowCount(0)
-            self.table.setColumnCount(0)
+            self.table_host.controls.append(
+                ft.Container(
+                    padding=30,
+                    content=ft.Text(
+                        "Відкрийте Excel-файл або створіть нову книгу.",
+                        color=ft.Colors.BLUE_GREY_600,
+                    ),
+                )
+            )
             self._update_edit_permissions()
+            self.page.update()
             return
 
         df = self.model.dataframe(self.current_sheet)
         headers = self.model.headers(self.current_sheet)
         visible_headers = [h for h in headers if h != "№ з/п"]
-        self.table.setColumnCount(len(visible_headers))
-        self.table.setHorizontalHeaderLabels([header.replace("\n", " ") for header in visible_headers])
+        query = norm(self.search.value)
 
-        if df.empty:
-            self.table.setRowCount(0)
-            self._update_edit_permissions()
-            return
+        duplicate_map = (
+            self.model.duplicate_map()
+            if self.current_sheet == SHEET_MOVEMENT
+            else {}
+        )
 
-        data_headers = [c for c in df.columns if c not in ("_excel_row", "№ з/п")]
-        self.table.setRowCount(len(df))
-        duplicate_map = self.model.duplicate_map() if self.current_sheet == SHEET_MOVEMENT else {}
+        data_rows = []
+        matched = 0
+        for _, row in df.iterrows():
+            if query:
+                searchable = []
+                for header in visible_headers:
+                    if header == "Сума":
+                        value = calculate_total(row.get("Ціна"), row.get("Кількість"))
+                    else:
+                        value = row.get(header)
+                    searchable.append(norm(display_value(value)))
+                if not any(query in value for value in searchable):
+                    continue
 
-        for r_idx, (_, row) in enumerate(df.iterrows()):
+            matched += 1
+            if len(data_rows) >= MAX_TABLE_ROWS:
+                continue
+
             excel_row = int(row["_excel_row"])
             dup = duplicate_map.get(excel_row, DuplicateInfo())
-            for c_idx, header in enumerate(data_headers):
+            text_color = None
+            if dup.score >= 5:
+                text_color = ft.Colors.RED_700
+            elif dup.score == 4:
+                text_color = ft.Colors.ORANGE_800
+            elif dup.score == 3:
+                text_color = ft.Colors.AMBER_900
+
+            cells = []
+            for header in visible_headers:
                 if header == "Сума":
-                    price = numeric_value(row.get("Ціна"))
-                    qty = numeric_value(row.get("Кількість"))
-                    value = "" if price is None or qty is None else f"{price * qty:.2f}"
+                    value = calculate_total(row.get("Ціна"), row.get("Кількість"))
+                    cell_text = "" if value is None else format_decimal(value, 2)
                 else:
-                    value = display_value(row.get(header))
-                item = QTableWidgetItem(value)
-                item.setData(Qt.UserRole, excel_row)
-                if self.current_sheet == SHEET_MOVEMENT:
-                    if dup.score >= 5:
-                        item.setForeground(QColor("#c00000"))
-                        item.setFont(QFont(item.font().family(), item.font().pointSize(), QFont.Bold))
-                    elif dup.score == 4:
-                        item.setForeground(QColor("#e26b0a"))
-                    elif dup.score == 3:
-                        item.setForeground(QColor("#9c6500"))
-                    if dup.score >= 3:
-                        item.setToolTip(f"Збіг {dup.score}/5 з Excel-рядками: {', '.join(map(str, dup.other_excel_rows))}. Збереження не блокується.")
-                self.table.setItem(r_idx, c_idx, item)
+                    cell_text = display_value(row.get(header))
 
-        self.table.resizeRowsToContents()
-        self.statusBar().showMessage(f"{self.current_sheet}: {len(df)} записів | {self.model.path or ''}")
-        self.apply_filter()
+                cells.append(
+                    ft.DataCell(
+                        ft.Container(
+                            width=165,
+                            padding=4,
+                            content=ft.Text(
+                                cell_text,
+                                size=12,
+                                color=text_color,
+                                max_lines=3,
+                            ),
+                        )
+                    )
+                )
+
+            data_rows.append(
+                ft.DataRow(
+                    data=excel_row,
+                    selected=excel_row == self.selected_excel_row,
+                    on_select_change=self._row_selected,
+                    cells=cells,
+                )
+            )
+
+        columns = [
+            ft.DataColumn(
+                label=ft.Container(
+                    width=165,
+                    padding=4,
+                    content=ft.Text(
+                        header.replace("\n", " "),
+                        size=12,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                )
+            )
+            for header in visible_headers
+        ]
+
+        table = ft.DataTable(
+            columns=columns,
+            rows=data_rows,
+            show_checkbox_column=False,
+            heading_row_color=ft.Colors.BLUE_50,
+            data_row_min_height=44,
+            data_row_max_height=72,
+            column_spacing=8,
+            horizontal_margin=8,
+        )
+
+        self.table_host.controls.append(
+            ft.Row(
+                controls=[table],
+                scroll=ft.ScrollMode.AUTO,
+            )
+        )
+
+        shown = min(matched, MAX_TABLE_ROWS)
+        suffix = (
+            f" | показано перші {MAX_TABLE_ROWS}"
+            if matched > MAX_TABLE_ROWS
+            else ""
+        )
+        self.status.value = (
+            f"{self.current_sheet}: {matched} записів{suffix}"
+            f" | {self.model.path or ''}"
+        )
         self._update_edit_permissions()
+        self.page.update()
 
-    def apply_filter(self):
-        query = norm(self.search.text())
-        for row in range(self.table.rowCount()):
-            visible = True
-            if query:
-                visible = any(query in norm(self.table.item(row, col).text() if self.table.item(row, col) else "") for col in range(self.table.columnCount()))
-            self.table.setRowHidden(row, not visible)
+    def _row_selected(self, e):
+        excel_row = int(e.control.data)
+        is_selected = bool(e.data)
+        self.selected_excel_row = excel_row if is_selected else None
+        self._refresh_table()
 
-    def _selected_excel_row(self):
-        row = self.table.currentRow()
-        if row < 0:
-            return None
-        item = self.table.item(row, 0)
-        return int(item.data(Qt.UserRole)) if item and item.data(Qt.UserRole) else None
+    def _display_headers_for_form(self, headers: list[str]) -> list[str]:
+        result = [h for h in headers if h != "№ з/п"]
+        if "Ціна" in result and "Кількість" in result:
+            result.remove("Кількість")
+            result.insert(result.index("Ціна"), "Кількість")
+        return result
 
-    def add_record(self):
+    def _build_record_data(
+        self,
+        field_controls: dict[str, ft.Control],
+        reverse_mode: bool,
+        calculated_price: Optional[float],
+        calculated_sum: Optional[float],
+        price_input: ft.TextField,
+        sum_input: ft.TextField,
+    ) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for header, control in field_controls.items():
+            if header == "Ціна":
+                out[header] = (
+                    calculated_price
+                    if reverse_mode
+                    else parse_user_value(header, price_input.value or "")
+                )
+                continue
+            if header == "Сума":
+                out[header] = (
+                    numeric_value(sum_input.value)
+                    if reverse_mode
+                    else calculated_sum
+                )
+                continue
+            if isinstance(control, ft.Dropdown):
+                # В editable Dropdown беремо фактично введений текст першим,
+                # щоб ручне уточнення не перекривалося старим selected value.
+                raw = control.text or control.value or ""
+            elif isinstance(control, ft.TextField):
+                raw = control.value or ""
+            else:
+                raw = ""
+            out[header] = parse_user_value(header, raw)
+        return out
+
+    def _open_record_dialog(self, excel_row: Optional[int] = None):
         if self.model.wb is None or self.current_sheet != SHEET_MOVEMENT:
             return
-        headers = self.model.headers(self.current_sheet)
-        dialog = RecordDialog(headers, parent=self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        data = dialog.data()
 
-        if self.current_sheet == SHEET_MOVEMENT:
-            dup = self.model.score_candidate_duplicate(data)
-            if dup.score >= 3 and not self._duplicate_confirmation(dup):
-                return
-            asset_type = norm(data.get(MAIN_HEADERS[8]))
-            if "необорот" in asset_type and not norm(data.get(MAIN_HEADERS[9])):
-                answer = QMessageBox.warning(self, "Інвентарний номер не вказаний", "Для необоротного активу інвентарний номер порожній. Зберегти запис все одно?", QMessageBox.Yes | QMessageBox.No)
-                if answer != QMessageBox.Yes:
+        headers = self.model.headers(SHEET_MOVEMENT)
+        values: dict[str, Any] = {}
+        if excel_row is not None:
+            ws = self.model.wb[SHEET_MOVEMENT]
+            values = {
+                header: ws.cell(excel_row, i + 1).value
+                for i, header in enumerate(headers)
+            }
+
+        state = {
+            "reverse": False,
+            "calculated_price": numeric_value(values.get("Ціна")),
+            "calculated_sum": None,
+            "warnings_acknowledged": False,
+        }
+        field_controls: dict[str, ft.Control] = {}
+
+        qty_input = ft.TextField(
+            value=display_value(values.get("Кількість")),
+            on_change=lambda e: refresh_calculation(),
+        )
+        price_input = ft.TextField(
+            value=display_value(values.get("Ціна")),
+            on_change=lambda e: refresh_calculation(),
+        )
+        price_label = ft.Text(
+            "—",
+            size=16,
+            weight=ft.FontWeight.W_600,
+        )
+        price_label_box = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=12, vertical=13),
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=8,
+            content=price_label,
+            visible=False,
+        )
+
+        sum_label = ft.Text(
+            "—",
+            size=16,
+            weight=ft.FontWeight.W_600,
+        )
+        sum_label_box = ft.Container(
+            padding=ft.Padding.symmetric(horizontal=12, vertical=13),
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=8,
+            content=sum_label,
+        )
+        sum_input = ft.TextField(
+            hint_text="Введіть загальну вартість",
+            visible=False,
+            on_change=lambda e: refresh_calculation(),
+        )
+
+        mode_button = ft.Button(
+            content="⟳  Розрахунок від суми",
+        )
+        warning_text = ft.Text(
+            "",
+            color=ft.Colors.ORANGE_900,
+            weight=ft.FontWeight.W_600,
+            visible=False,
+        )
+
+        price_host = ft.Column(
+            controls=[price_input, price_label_box],
+            spacing=0,
+        )
+        sum_host = ft.Column(
+            controls=[sum_label_box, sum_input],
+            spacing=0,
+        )
+
+        def refresh_calculation():
+            qty = numeric_value(qty_input.value)
+            if state["reverse"]:
+                state["calculated_sum"] = numeric_value(sum_input.value)
+                state["calculated_price"] = calculate_unit_price(
+                    sum_input.value, qty
+                )
+                price_label.value = format_decimal(
+                    state["calculated_price"], 5
+                )
+            else:
+                state["calculated_price"] = numeric_value(price_input.value)
+                state["calculated_sum"] = calculate_total(
+                    price_input.value, qty
+                )
+                sum_label.value = format_decimal(
+                    state["calculated_sum"], 2
+                )
+            self.page.update()
+
+        def toggle_mode(e=None):
+            if state["reverse"]:
+                if state["calculated_price"] is not None:
+                    price_input.value = str(state["calculated_price"])
+                state["reverse"] = False
+            else:
+                if not (sum_input.value or "").strip():
+                    current_total = calculate_total(
+                        price_input.value, qty_input.value
+                    )
+                    if current_total is not None:
+                        sum_input.value = str(current_total)
+                state["reverse"] = True
+
+            price_input.visible = not state["reverse"]
+            price_label_box.visible = state["reverse"]
+            sum_label_box.visible = not state["reverse"]
+            sum_input.visible = state["reverse"]
+            mode_button.content = (
+                "⟳  Розрахунок від суми: УВІМКНЕНО"
+                if state["reverse"]
+                else "⟳  Розрахунок від суми"
+            )
+            state["warnings_acknowledged"] = False
+            warning_text.visible = False
+            refresh_calculation()
+
+        mode_button.on_click = toggle_mode
+
+        form_rows = []
+        display_headers = self._display_headers_for_form(headers)
+        for header in display_headers:
+            current = values.get(header)
+            label = ft.Text(
+                header.replace("\n", " "),
+                size=12,
+                weight=ft.FontWeight.W_600,
+            )
+
+            if header == "Кількість":
+                control = qty_input
+            elif header == "Ціна":
+                control = price_host
+            elif header == "Сума":
+                control = sum_host
+            elif header == MAIN_HEADERS[8]:
+                current_text = display_value(current)
+                options = ["", "Необоротний актив", "Запас"]
+                control = ft.Dropdown(
+                    editable=True,
+                    text=current_text,
+                    value=current_text if current_text in options and current_text else None,
+                    options=[
+                        ft.DropdownOption(key=o, text=o)
+                        for o in options
+                        if o
+                    ],
+                )
+            elif header == MAIN_HEADERS[23]:
+                current_text = display_value(current)
+                options = [
+                    "",
+                    "Справний",
+                    "Несправний",
+                    "Переданий в ремонт",
+                    "Знищений",
+                    "Втрачений",
+                ]
+                control = ft.Dropdown(
+                    editable=True,
+                    text=current_text,
+                    value=current_text if current_text in options and current_text else None,
+                    options=[
+                        ft.DropdownOption(key=o, text=o)
+                        for o in options
+                        if o
+                    ],
+                )
+            elif header == "Примітка":
+                control = ft.TextField(
+                    value=display_value(current),
+                    multiline=True,
+                    min_lines=2,
+                    max_lines=4,
+                )
+            else:
+                control = ft.TextField(
+                    value=display_value(current),
+                    hint_text=(
+                        "дд.мм.рррр"
+                        if "дата" in header.casefold()
+                        else None
+                    ),
+                )
+
+            field_controls[header] = control
+            form_rows.append(
+                ft.Row(
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                    controls=[
+                        ft.Container(width=285, padding=8, content=label),
+                        ft.Container(expand=True, content=control),
+                    ],
+                )
+            )
+
+            if header == "Кількість":
+                form_rows.append(
+                    ft.Row(
+                        controls=[
+                            ft.Container(width=285),
+                            ft.Container(expand=True, content=mode_button),
+                        ]
+                    )
+                )
+
+        reason_input = ft.TextField(
+            label="Причина зміни / уточнення",
+            hint_text="Наприклад: уточнення документів, помилка минулих років",
+        )
+        form_rows.append(ft.Divider())
+        form_rows.append(reason_input)
+        form_rows.append(warning_text)
+
+        def commit_record(data: dict[str, Any]):
+            try:
+                if excel_row is None:
+                    self.model.append_record(
+                        SHEET_MOVEMENT,
+                        data,
+                        reason_input.value or "",
+                    )
+                    message = "Запис додано. Зміни внесено до 'Контроль змін'."
+                else:
+                    changes = self.model.update_record(
+                        SHEET_MOVEMENT,
+                        excel_row,
+                        data,
+                        reason_input.value or "",
+                    )
+                    message = (
+                        f"Змінено полів: {len(changes)}. "
+                        "Зміни внесено до 'Контроль змін'."
+                    )
+                self.page.pop_dialog()
+                self.selected_excel_row = None
+                self._refresh_table()
+                self._set_status(message)
+            except Exception as exc:
+                self._show_message("Помилка запису", str(exc))
+
+        def save_record(e=None):
+            refresh_calculation()
+            if state["reverse"]:
+                total = numeric_value(sum_input.value)
+                qty = numeric_value(qty_input.value)
+                if total is not None and (qty is None or qty == 0):
+                    warning_text.value = (
+                        "Для розрахунку ціни від суми вкажіть кількість, "
+                        "більшу за нуль."
+                    )
+                    warning_text.visible = True
+                    self.page.update()
                     return
 
-        self.model.append_record(self.current_sheet, data, dialog.reason.text())
-        self.refresh_table()
+            data = self._build_record_data(
+                field_controls,
+                state["reverse"],
+                state["calculated_price"],
+                state["calculated_sum"],
+                price_input,
+                sum_input,
+            )
 
-    def edit_record(self, *_):
-        if self.model.wb is None or self.current_sheet != SHEET_MOVEMENT:
-            return
-        excel_row = self._selected_excel_row()
-        if not excel_row:
-            QMessageBox.information(self, "Редагування", "Виберіть рядок.")
-            return
-        ws = self.model.wb[self.current_sheet]
-        headers = self.model.headers(self.current_sheet)
-        values = {header: ws.cell(excel_row, i + 1).value for i, header in enumerate(headers)}
-        dialog = RecordDialog(headers, values, self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        data = dialog.data()
-        if self.current_sheet == SHEET_MOVEMENT:
+            warnings = []
             dup = self.model.score_candidate_duplicate(data, excel_row)
-            if dup.score >= 3 and not self._duplicate_confirmation(dup):
+            if dup.score >= 3:
+                if dup.score >= 5:
+                    level = "ПОВНИЙ ДУБЛЬ 5/5"
+                elif dup.score == 4:
+                    level = "ДУЖЕ СХОЖИЙ ЗАПИС 4/5"
+                else:
+                    level = "МОЖЛИВИЙ ДУБЛЬ 3/5"
+                warnings.append(
+                    f"{level}. Схожі Excel-рядки: "
+                    + ", ".join(map(str, dup.other_excel_rows))
+                )
+
+            asset_type = norm(data.get(MAIN_HEADERS[8]))
+            if (
+                "необорот" in asset_type
+                and not norm(data.get(MAIN_HEADERS[9]))
+            ):
+                warnings.append(
+                    "Для необоротного активу не вказаний інвентарний номер."
+                )
+
+            if warnings and not state["warnings_acknowledged"]:
+                warning_text.value = (
+                    "\n".join(warnings)
+                    + "\n\nНатисніть «Зберегти все одно» ще раз, "
+                    "якщо запис потрібно залишити."
+                )
+                warning_text.visible = True
+                state["warnings_acknowledged"] = True
+                save_button.content = "Зберегти все одно"
+                self.page.update()
                 return
-        changes = self.model.update_record(self.current_sheet, excel_row, data, dialog.reason.text())
-        if changes:
-            self.refresh_table()
-            self.statusBar().showMessage(f"Змінено полів: {len(changes)}. Записано в Контроль змін.", 5000)
 
-    def delete_record(self):
-        if self.model.wb is None or self.current_sheet != SHEET_MOVEMENT:
-            return
-        excel_row = self._selected_excel_row()
-        if not excel_row:
-            return
-        reason, ok = self._ask_reason("Причина видалення")
-        if not ok:
-            return
-        answer = QMessageBox.warning(self, "Видалення", "Запис буде прибрано з таблиці, але інформація про видалення залишиться у 'Контроль змін'. Продовжити?", QMessageBox.Yes | QMessageBox.No)
-        if answer != QMessageBox.Yes:
-            return
-        self.model.delete_record(self.current_sheet, excel_row, reason)
-        self.refresh_table()
+            commit_record(data)
 
-    def _ask_reason(self, title):
-        dialog = QDialog(self)
-        dialog.setWindowTitle(title)
-        layout = QVBoxLayout(dialog)
-        edit = QLineEdit()
-        edit.setPlaceholderText("Наприклад: дубль, уточнення документів, помилка минулих років")
-        layout.addWidget(edit)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        ok = dialog.exec() == QDialog.Accepted
-        return edit.text(), ok
+        save_button = ft.Button(
+            content="Зберегти",
+            icon=ft.Icons.SAVE,
+            on_click=save_record,
+        )
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Редагувати запис" if excel_row is not None else "Додати запис"
+            ),
+            content=ft.Container(
+                width=820,
+                height=610,
+                content=ft.Column(
+                    controls=form_rows,
+                    scroll=ft.ScrollMode.AUTO,
+                    spacing=7,
+                ),
+            ),
+            actions=[
+                ft.TextButton(
+                    "Скасувати",
+                    on_click=lambda e: self.page.pop_dialog(),
+                ),
+                save_button,
+            ],
+        )
+        refresh_calculation()
+        self.page.show_dialog(dialog)
 
-    def _duplicate_confirmation(self, dup):
-        if dup.score >= 5:
-            level = "ПОВНИЙ ДУБЛЬ 5/5"
-        elif dup.score == 4:
-            level = "ДУЖЕ СХОЖИЙ ЗАПИС 4/5"
-        else:
-            level = "МОЖЛИВИЙ ДУБЛЬ 3/5"
-        text = f"{level}\n\nСхожі Excel-рядки: {', '.join(map(str, dup.other_excel_rows))}\n\nСистема не блокує зміну. Зберегти все одно?"
-        return QMessageBox.warning(self, "Контроль дублювання", text, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes
+    def _add_record(self, e=None):
+        self._open_record_dialog()
 
-    def rebuild_current(self):
+    def _edit_record(self, e=None):
+        if self.selected_excel_row is None:
+            self._show_message("Редагування", "Виберіть рядок.")
+            return
+        self._open_record_dialog(self.selected_excel_row)
+
+    def _delete_record(self, e=None):
+        if self.selected_excel_row is None or self.model.wb is None:
+            return
+        reason = ft.TextField(
+            label="Причина видалення",
+            hint_text="Наприклад: дубль, уточнення документів",
+        )
+
+        def confirm_delete(evt=None):
+            try:
+                row = self.selected_excel_row
+                self.page.pop_dialog()
+                if row is None:
+                    return
+                self.model.delete_record(
+                    SHEET_MOVEMENT,
+                    row,
+                    reason.value or "",
+                )
+                self.selected_excel_row = None
+                self._refresh_table()
+                self._set_status(
+                    "Запис видалено; інформація залишилась у 'Контроль змін'."
+                )
+            except Exception as exc:
+                self._show_message("Помилка видалення", str(exc))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Видалити запис?"),
+            content=ft.Column(
+                controls=[
+                    ft.Text(
+                        "Запис буде прибрано з таблиці, але інформація про "
+                        "видалення залишиться у 'Контроль змін'."
+                    ),
+                    reason,
+                ],
+                tight=True,
+            ),
+            actions=[
+                ft.TextButton(
+                    "Скасувати",
+                    on_click=lambda e: self.page.pop_dialog(),
+                ),
+                ft.Button(
+                    content="Видалити",
+                    icon=ft.Icons.DELETE,
+                    on_click=confirm_delete,
+                ),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _rebuild_current(self, e=None):
         if self.model.wb is None:
+            self._show_message(
+                "Поточний стан",
+                "Спочатку відкрийте або створіть книгу.",
+            )
             return
         try:
             count, skipped = self.model.rebuild_current_state()
-            self.refresh_table()
-            QMessageBox.information(
-                self, "Поточний стан оновлено",
+            self._refresh_table()
+            self._show_message(
+                "Поточний стан оновлено",
                 f"Сформовано поштучних записів: {count}.\n"
-                f"Записів без інвентарного/заводського номера, які не згорнуті автоматично: {skipped}.\n\n"
-                "Колонка 'Штатна потреба' не перераховувалась — значення перенесені як є.",
+                f"Записів без інвентарного/заводського номера, "
+                f"які не згорнуті автоматично: {skipped}.\n\n"
+                "Колонка 'Штатна потреба' не перераховувалась.",
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Помилка розрахунку", str(exc))
-
-    def closeEvent(self, event):
-        if self._maybe_save():
-            event.accept()
-        else:
-            event.ignore()
+            self._show_message("Помилка розрахунку", str(exc))
 
 
-def main() -> int:
-    app = QApplication(sys.argv)
-    app.setApplicationName(APP_TITLE)
-    window = MainWindow()
-    window.show()
-
-    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-    for candidate in (base / "Oblik.xlsx", base / "data" / "Oblik.xlsx"):
-        if candidate.exists():
-            QTimer.singleShot(0, lambda p=candidate: (window.model.load(p), window.refresh_table()))
-            break
-
-    return app.exec()
+def main(page: ft.Page):
+    FletOblikApp(page)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    ft.run(main)
