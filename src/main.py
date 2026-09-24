@@ -1081,7 +1081,9 @@ class FletOblikApp:
                 )
                 continue
             if isinstance(control, ft.Dropdown):
-                raw = control.value or control.text or ""
+                # В editable Dropdown беремо фактично введений текст першим,
+                # щоб ручне уточнення не перекривалося старим selected value.
+                raw = control.text or control.value or ""
             elif isinstance(control, ft.TextField):
                 raw = control.value or ""
             else:
