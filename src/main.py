@@ -19,6 +19,7 @@ Oblik Inventory
 from __future__ import annotations
 
 import getpass
+import json
 import sys
 from collections import defaultdict
 from copy import copy
@@ -35,7 +36,7 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -43,6 +44,24 @@ SHEET_CURRENT = "Поточний стан"
 SHEET_SUMMARY = "Зведений"
 SHEET_CHANGES = "Контроль змін"
 REQUIRED_SHEETS = [SHEET_STAFF, SHEET_MOVEMENT, SHEET_CURRENT, SHEET_SUMMARY, SHEET_CHANGES]
+SETTINGS_VIEW = "Налаштування"
+
+DEFAULT_APP_SETTINGS = {
+    "unit_number": "",
+    "unit_name": "",
+    "commander_position": "Командир військової частини",
+    "commander_rank": "",
+    "commander_name": "",
+    "service_name": "",
+    "service_chief_position": "",
+    "service_chief_rank": "",
+    "service_chief_name": "",
+    "finance_chief_position": "Начальник фінансово-економічної служби",
+    "finance_chief_rank": "",
+    "finance_chief_name": "",
+    "document_prefix": "",
+    "document_start_number": "1",
+}
 
 MAIN_HEADERS = [
     "№ з/п",
@@ -586,6 +605,44 @@ class OblikWorkbook:
 MAX_TABLE_ROWS = 250
 
 
+class AppSettingsStore:
+    """Локальні portable-налаштування програми у JSON поруч із Oblik.exe."""
+
+    def __init__(self) -> None:
+        base = (
+            Path(sys.executable).parent
+            if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parent.parent
+        )
+        self.path = base / "oblik_settings.json"
+
+    def load(self) -> dict[str, str]:
+        values = dict(DEFAULT_APP_SETTINGS)
+        if not self.path.exists():
+            return values
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                for key in values:
+                    if key in loaded and loaded[key] is not None:
+                        values[key] = str(loaded[key])
+        except (OSError, json.JSONDecodeError):
+            # Пошкоджені налаштування не повинні блокувати запуск програми.
+            pass
+        return values
+
+    def save(self, values: dict[str, Any]) -> Path:
+        data = dict(DEFAULT_APP_SETTINGS)
+        for key in data:
+            value = values.get(key, "")
+            data[key] = "" if value is None else str(value).strip()
+        self.path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return self.path
+
+
 class FletOblikApp:
     """Flet-інтерфейс. Облікова логіка лишається в OblikWorkbook."""
 
@@ -595,6 +652,9 @@ class FletOblikApp:
         self.current_sheet = SHEET_MOVEMENT
         self.selected_excel_row: Optional[int] = None
         self.file_picker = ft.FilePicker()
+        self.settings_store = AppSettingsStore()
+        self.settings = self.settings_store.load()
+        self.settings_fields: dict[str, ft.TextField] = {}
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -704,6 +764,17 @@ class FletOblikApp:
             )
             self.sheet_buttons[sheet] = button
             nav_controls.append(button)
+
+        nav_controls.extend([
+            ft.Divider(),
+            ft.Button(
+                content="Налаштування",
+                icon=ft.Icons.SETTINGS,
+                data=SETTINGS_VIEW,
+                on_click=self._select_sheet,
+                width=205,
+            ),
+        ])
 
         sidebar = ft.Container(
             width=230,
@@ -897,6 +968,144 @@ class FletOblikApp:
         self.selected_excel_row = None
         self._refresh_table()
 
+    def _settings_field(self, key: str, label: str, hint: str = "") -> ft.TextField:
+        field = ft.TextField(
+            label=label,
+            hint_text=hint or None,
+            value=self.settings.get(key, ""),
+        )
+        self.settings_fields[key] = field
+        return field
+
+    def _settings_card(self, title: str, subtitle: str, controls: list[ft.Control]) -> ft.Container:
+        return ft.Container(
+            padding=18,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+            border_radius=12,
+            bgcolor=ft.Colors.WHITE,
+            content=ft.Column(
+                controls=[
+                    ft.Text(title, size=18, weight=ft.FontWeight.BOLD),
+                    ft.Text(subtitle, size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Divider(),
+                    *controls,
+                ],
+                spacing=10,
+            ),
+        )
+
+    def _render_settings(self):
+        self.table_host.controls.clear()
+        self.search.visible = False
+        self.btn_add.visible = False
+        self.btn_edit.visible = False
+        self.btn_delete.visible = False
+        self.sheet_title.value = SETTINGS_VIEW
+        self.file_label.value = f"Файл налаштувань: {self.settings_store.path.name}"
+        self.settings_fields = {}
+
+        unit_card = self._settings_card(
+            "Військова частина",
+            "Основні реквізити, які надалі можна використовувати у відомостях і звітах.",
+            [
+                self._settings_field("unit_number", "Номер військової частини", "Наприклад: А0000"),
+                self._settings_field("unit_name", "Найменування військової частини"),
+            ],
+        )
+
+        commander_card = self._settings_card(
+            "Командир військової частини",
+            "Дані для автоматичного підставлення у службові документи.",
+            [
+                self._settings_field("commander_position", "Посада"),
+                self._settings_field("commander_rank", "Військове звання"),
+                self._settings_field("commander_name", "ПІБ"),
+            ],
+        )
+
+        service_card = self._settings_card(
+            "Начальник служби / відповідальна особа",
+            "Реквізити служби, яка веде облік.",
+            [
+                self._settings_field("service_name", "Назва служби", "Наприклад: служба озброєння"),
+                self._settings_field("service_chief_position", "Посада"),
+                self._settings_field("service_chief_rank", "Військове звання"),
+                self._settings_field("service_chief_name", "ПІБ"),
+            ],
+        )
+
+        finance_card = self._settings_card(
+            "Фінансово-економічна служба",
+            "Дані начальника ФЕС для майбутніх документів і погоджень.",
+            [
+                self._settings_field("finance_chief_position", "Посада"),
+                self._settings_field("finance_chief_rank", "Військове звання"),
+                self._settings_field("finance_chief_name", "ПІБ"),
+            ],
+        )
+
+        numbering_card = self._settings_card(
+            "Нумерація документів",
+            "Загальні параметри, які можна використовувати при автоматичному формуванні документів.",
+            [
+                self._settings_field("document_prefix", "Префікс номера", "Наприклад: ЗВ-"),
+                self._settings_field("document_start_number", "Початковий номер", "Наприклад: 1"),
+            ],
+        )
+
+        def save_settings(e=None):
+            values = {
+                key: field.value or ""
+                for key, field in self.settings_fields.items()
+            }
+            try:
+                path = self.settings_store.save(values)
+                self.settings = self.settings_store.load()
+                self.status.value = f"Налаштування збережено: {path}"
+                self._show_message(
+                    "Налаштування збережено",
+                    "Реквізити збережені локально і будуть доступні після наступного запуску програми.",
+                )
+            except PermissionError:
+                self._show_message(
+                    "Немає доступу до запису",
+                    "Не вдалося зберегти oblik_settings.json поруч із програмою. Перемістіть Oblik.exe у папку, де дозволений запис.",
+                )
+            except Exception as exc:
+                self._show_message("Помилка налаштувань", str(exc))
+
+        self.table_host.controls.extend([
+            ft.Container(
+                width=900,
+                content=ft.Column(
+                    controls=[
+                        ft.Text(
+                            "Ці реквізити зберігаються локально на цьому комп'ютері та не записуються в Excel автоматично.",
+                            color=ft.Colors.BLUE_GREY_700,
+                        ),
+                        unit_card,
+                        commander_card,
+                        service_card,
+                        finance_card,
+                        numbering_card,
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.END,
+                            controls=[
+                                ft.Button(
+                                    content="Зберегти налаштування",
+                                    icon=ft.Icons.SAVE,
+                                    on_click=save_settings,
+                                ),
+                            ],
+                        ),
+                    ],
+                    spacing=14,
+                ),
+            )
+        ])
+        self.status.value = f"Налаштування: {self.settings_store.path}"
+        self.page.update()
+
     def _update_edit_permissions(self):
         editable = self.current_sheet == SHEET_MOVEMENT and self.model.wb is not None
         self.btn_add.disabled = not editable
@@ -905,6 +1114,14 @@ class FletOblikApp:
         self.btn_delete.disabled = not selected
 
     def _refresh_table(self):
+        if self.current_sheet == SETTINGS_VIEW:
+            self._render_settings()
+            return
+
+        self.search.visible = True
+        self.btn_add.visible = True
+        self.btn_edit.visible = True
+        self.btn_delete.visible = True
         self.table_host.controls.clear()
         self.sheet_title.value = self.current_sheet
         self.file_label.value = (
