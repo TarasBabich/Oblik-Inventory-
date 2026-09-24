@@ -8,3 +8,4 @@ __pycache__/
 ~$*.xlsx
 .idea/
 .vscode/
+oblik_settings.json
