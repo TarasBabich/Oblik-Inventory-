@@ -4,9 +4,10 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence)
 import pandas as pd
 import flet as ft
+import flet_datatable2 as fdt
 
 
 def record(inv, serial, order, order_date, act, act_date, location, qty=1):
@@ -54,6 +55,19 @@ def main():
     )
     assert scrollbar.orientation == ft.ScrollbarOrientation.BOTTOM
     assert scrollbar.thumb_visibility is True
+
+    sticky_table = fdt.DataTable2(
+        columns=[ft.DataColumn(label=ft.Text("ID"))],
+        rows=[],
+        fixed_top_rows=1,
+        fixed_left_columns=1,
+        visible_horizontal_scroll_bar=True,
+        visible_vertical_scroll_bar=True,
+        min_width=500,
+    )
+    assert sticky_table.fixed_top_rows == 1
+    assert sticky_table.fixed_left_columns == 1
+    assert sticky_table.visible_horizontal_scroll_bar is True
 
     assert format_inventory_number("ОВТ-", 25, 6) == "ОВТ-000025"
     assert format_inventory_number("100-", 7, 4, "/26") == "100-0007/26"
@@ -124,17 +138,26 @@ def main():
         tx_col = model.headers(SHEET_MOVEMENT).index(TRANSACTION_ID_HEADER) + 1
         tx1 = ws_move.cell(row1, tx_col).value
         assert tx1 == "TX-001"
+        op_col = model.headers(SHEET_MOVEMENT).index(OPERATION_TYPE_HEADER) + 1
+        assert ws_move.cell(row1, op_col).value == "Первинний запис"
         assert display_value(pd.NaT) == ""
 
         # Як і в інтерфейсі: перевіряємо майбутній запис ДО його збереження.
         # Те саме майно з іншими документами не має бути повним дублем.
         dup = model.score_candidate_duplicate(r2)
         assert dup.score < 5
+        r2[OPERATION_TYPE_HEADER] = "Переміщення"
         row2 = model.append_record(SHEET_MOVEMENT, r2, "test")
         assert ws_move[f"A{row2}"].value == "=ROW()-1"
         assert ws_move[f"R{row2}"].value == f"=P{row2}*Q{row2}"
         tx2 = ws_move.cell(row2, tx_col).value
         assert tx2 == "TX-002"
+        assert ws_move.cell(row2, op_col).value == "Переміщення"
+
+        # Службові транзакції руху не є дублями первинного оприбуткування.
+        dup_map = model.duplicate_map()
+        assert dup_map.get(row1) is None or dup_map[row1].score < 5
+        assert row2 not in dup_map
 
         count, skipped = model.rebuild_current_state()
         assert count == 1

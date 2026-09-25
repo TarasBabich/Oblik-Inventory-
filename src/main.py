@@ -34,9 +34,10 @@ from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 import flet as ft
+import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.6"
+APP_VERSION = "0.2.7"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -46,6 +47,7 @@ SHEET_CHANGES = "Контроль змін"
 REQUIRED_SHEETS = [SHEET_STAFF, SHEET_MOVEMENT, SHEET_CURRENT, SHEET_SUMMARY, SHEET_CHANGES]
 SETTINGS_VIEW = "Налаштування"
 TRANSACTION_ID_HEADER = "ID транзакції"
+OPERATION_TYPE_HEADER = "Тип операції"
 
 DEFAULT_APP_SETTINGS = {
     "unit_number": "",
@@ -111,6 +113,7 @@ MAIN_HEADERS = [
     "Дата єдиного акту списання",
     "Примітка",
     TRANSACTION_ID_HEADER,
+    OPERATION_TYPE_HEADER,
 ]
 
 CHANGE_HEADERS = [
@@ -373,22 +376,29 @@ class OblikWorkbook:
             migrated = True
         if self._ensure_transaction_ids():
             migrated = True
+        if self._ensure_operation_types():
+            migrated = True
 
         self.path = path
         self.dirty = migrated
 
     def _ensure_main_sheet_schema(self, ws) -> bool:
-        """Додає нові технічні колонки без зсуву наявної Excel-структури."""
+        """Додає нові технічні колонки в кінець, не зсуваючи стару Excel-структуру."""
         headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
-        if TRANSACTION_ID_HEADER in headers:
-            return False
-        col = ws.max_column + 1
-        ws.cell(1, col, TRANSACTION_ID_HEADER)
-        if col > 1 and ws.cell(1, col - 1).has_style:
-            ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
-        ws.column_dimensions[get_column_letter(col)].width = 18
-        ws.auto_filter.ref = f"A1:{get_column_letter(col)}1"
-        return True
+        changed = False
+        for technical_header in (TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER):
+            if technical_header in headers:
+                continue
+            col = ws.max_column + 1
+            ws.cell(1, col, technical_header)
+            if col > 1 and ws.cell(1, col - 1).has_style:
+                ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
+            ws.column_dimensions[get_column_letter(col)].width = 18
+            headers.append(technical_header)
+            changed = True
+        if changed:
+            ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}1"
+        return changed
 
     def _ensure_change_sheet_schema(self, ws) -> bool:
         headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
@@ -478,6 +488,22 @@ class OblikWorkbook:
 
         return changed
 
+    def _ensure_operation_types(self) -> bool:
+        ws = self.wb[SHEET_MOVEMENT]
+        headers = self.headers(SHEET_MOVEMENT)
+        if OPERATION_TYPE_HEADER not in headers:
+            return False
+        op_col = headers.index(OPERATION_TYPE_HEADER) + 1
+        tx_col = headers.index(TRANSACTION_ID_HEADER) + 1
+        changed = False
+        for row in range(2, ws.max_row + 1):
+            if not self._row_has_data(ws, row, 2, tx_col):
+                continue
+            if not norm(ws.cell(row, op_col).value):
+                ws.cell(row, op_col, "Імпортований запис")
+                changed = True
+        return changed
+
     def _transaction_id_exists(self, transaction_id: Any, ignore_excel_row: Optional[int] = None) -> bool:
         wanted = norm(transaction_id)
         if not wanted or self.wb is None:
@@ -550,6 +576,8 @@ class OblikWorkbook:
                 sequence += 1
                 transaction_id = format_transaction_id(sequence)
             values[TRANSACTION_ID_HEADER] = transaction_id
+            if not norm(values.get(OPERATION_TYPE_HEADER)):
+                values[OPERATION_TYPE_HEADER] = "Первинний запис"
         start_row = 2
         row = self._first_empty_data_row(ws, start_row)
         template_row = start_row
@@ -581,7 +609,7 @@ class OblikWorkbook:
         changes = []
 
         for i, header in enumerate(headers, 1):
-            if header in ("№ з/п", "Сума", TRANSACTION_ID_HEADER):
+            if header in ("№ з/п", "Сума", TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER):
                 continue
             old = old_values.get(header)
             new = new_values.get(header)
@@ -657,6 +685,9 @@ class OblikWorkbook:
 
         records = []
         for _, row in df.iterrows():
+            operation_type = norm(row.get(OPERATION_TYPE_HEADER))
+            if operation_type and operation_type not in ("первинний запис", "імпортований запис"):
+                continue
             identifier = norm(row.get(DUPLICATE_FIELDS["inventory_no"])) or norm(row.get(DUPLICATE_FIELDS["serial_no"]))
             sig = [
                 norm(row.get(DUPLICATE_FIELDS["order_no"])),
@@ -709,6 +740,9 @@ class OblikWorkbook:
             rnum = int(row["_excel_row"])
             if ignore_excel_row and rnum == ignore_excel_row:
                 continue
+            operation_type = norm(row.get(OPERATION_TYPE_HEADER))
+            if operation_type and operation_type not in ("первинний запис", "імпортований запис"):
+                continue
             sig = [
                 norm(row.get(DUPLICATE_FIELDS["order_no"])),
                 norm(row.get(DUPLICATE_FIELDS["order_date"])),
@@ -735,8 +769,13 @@ class OblikWorkbook:
         name_col = MAIN_HEADERS[12]
         inv_col = MAIN_HEADERS[9]
         serial_col = MAIN_HEADERS[18]
-        movement_date_col = MAIN_HEADERS[22]
-        receive_date_col = MAIN_HEADERS[4]
+        event_date_cols = [
+            MAIN_HEADERS[22],  # документ поточного розміщення
+            MAIN_HEADERS[24],  # дата зміни стану
+            MAIN_HEADERS[30],  # дата наказу на списання
+            MAIN_HEADERS[32],  # дата єдиного акту списання
+            MAIN_HEADERS[4],   # дата первинного отримання
+        ]
 
         def key_for(row) -> str:
             inv = norm(row.get(inv_col))
@@ -757,10 +796,21 @@ class OblikWorkbook:
                 return pd.NaT
             return pd.to_datetime(value, dayfirst=True, errors="coerce")
 
-        identified["_sort_date"] = identified[movement_date_col].map(as_ts)
-        identified["_receive_date"] = identified[receive_date_col].map(as_ts)
-        identified["_sort_date"] = identified["_sort_date"].fillna(identified["_receive_date"])
-        identified["_sort_date"] = identified["_sort_date"].fillna(pd.Timestamp("1900-01-01"))
+        event_dates = pd.DataFrame(
+            {
+                header: identified[header].map(as_ts)
+                for header in event_date_cols
+                if header in identified.columns
+            },
+            index=identified.index,
+        )
+        if event_dates.empty:
+            identified["_sort_date"] = pd.Timestamp("1900-01-01")
+        else:
+            identified["_sort_date"] = event_dates.max(axis=1)
+            identified["_sort_date"] = identified["_sort_date"].fillna(
+                pd.Timestamp("1900-01-01")
+            )
         identified = identified.sort_values(["_asset_key", "_sort_date", "_excel_row"])
         latest = identified.groupby("_asset_key", as_index=False).tail(1)
 
@@ -912,7 +962,8 @@ class FletOblikApp:
             on_change=self._search_changed,
             expand=True,
         )
-        self.table_host = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
+        # Таблиця сама керує вертикальною/горизонтальною прокруткою через DataTable2.
+        self.table_host = ft.Column(expand=True)
 
         self.btn_add = ft.Button(
             content="+ Додати запис",
@@ -931,6 +982,69 @@ class FletOblikApp:
             icon=ft.Icons.DELETE_OUTLINE,
             on_click=self._delete_record,
             disabled=True,
+        )
+
+        self.action_menu = ft.PopupMenuButton(
+            disabled=True,
+            menu_position=ft.PopupMenuPosition.UNDER,
+            content=ft.Container(
+                padding=ft.Padding.symmetric(horizontal=14, vertical=9),
+                border=ft.Border.all(1, ft.Colors.BLUE_200),
+                border_radius=22,
+                bgcolor=ft.Colors.BLUE_50,
+                content=ft.Row(
+                    tight=True,
+                    spacing=6,
+                    controls=[
+                        ft.Icon(ft.Icons.BOLT, size=18, color=ft.Colors.BLUE_700),
+                        ft.Text("Дія", weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_800),
+                        ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=20, color=ft.Colors.BLUE_700),
+                    ],
+                ),
+            ),
+            items=[
+                ft.PopupMenuItem(
+                    icon=ft.Icons.SWAP_HORIZ,
+                    content="Перемістити",
+                    on_click=self._open_move_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.INVENTORY_2,
+                    content="Видати запас",
+                    on_click=self._open_issue_stock_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.ASSIGNMENT_RETURN,
+                    content="Повернути запас",
+                    on_click=self._open_return_stock_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.DELETE_SWEEP,
+                    content="Списати",
+                    on_click=self._open_writeoff_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HEALTH_AND_SAFETY,
+                    content="Змінити стан",
+                    on_click=self._open_status_dialog,
+                ),
+                ft.PopupMenuItem(content=ft.Divider(height=1), height=12),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HISTORY,
+                    content="Переглянути історію",
+                    on_click=self._show_selected_history,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.EDIT,
+                    content="Редагувати запис",
+                    on_click=self._edit_record,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    content="Видалити запис",
+                    on_click=self._delete_record,
+                ),
+            ],
         )
 
         self.sheet_buttons: dict[str, ft.Button] = {}
@@ -1024,8 +1138,7 @@ class FletOblikApp:
             controls=[
                 self.search,
                 self.btn_add,
-                self.btn_edit,
-                self.btn_delete,
+                self.action_menu,
             ],
             spacing=8,
         )
@@ -1234,6 +1347,7 @@ class FletOblikApp:
         self.btn_add.visible = False
         self.btn_edit.visible = False
         self.btn_delete.visible = False
+        self.action_menu.visible = False
         self.sheet_title.value = SETTINGS_VIEW
         self.file_label.value = f"Файл налаштувань: {self.settings_store.path.name}"
         self.settings_fields = {}
@@ -1512,9 +1626,15 @@ class FletOblikApp:
 
         self.table_host.controls.extend([
             ft.Container(
-                width=900,
+                expand=True,
                 content=ft.Column(
+                    expand=True,
+                    scroll=ft.ScrollMode.AUTO,
                     controls=[
+                        ft.Container(
+                            width=900,
+                            content=ft.Column(
+                                controls=[
                         ft.Text(
                             "Ці реквізити зберігаються локально на цьому комп'ютері та не записуються в Excel автоматично.",
                             color=ft.Colors.BLUE_GREY_700,
@@ -1527,18 +1647,21 @@ class FletOblikApp:
                         commission_card,
                         inventory_generator_card,
                         numbering_card,
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.END,
-                            controls=[
-                                ft.Button(
-                                    content="Зберегти налаштування",
-                                    icon=ft.Icons.SAVE,
-                                    on_click=save_settings,
-                                ),
-                            ],
-                        ),
+                                    ft.Row(
+                                        alignment=ft.MainAxisAlignment.END,
+                                        controls=[
+                                            ft.Button(
+                                                content="Зберегти налаштування",
+                                                icon=ft.Icons.SAVE,
+                                                on_click=save_settings,
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                                spacing=14,
+                            ),
+                        )
                     ],
-                    spacing=14,
                 ),
             )
         ])
@@ -1551,6 +1674,8 @@ class FletOblikApp:
         selected = editable and self.selected_excel_row is not None
         self.btn_edit.disabled = not selected
         self.btn_delete.disabled = not selected
+        self.action_menu.disabled = not selected
+        self.action_menu.opacity = 1.0 if selected else 0.45
 
     def _refresh_table(self):
         if self.current_sheet == SETTINGS_VIEW:
@@ -1558,9 +1683,10 @@ class FletOblikApp:
             return
 
         self.search.visible = True
-        self.btn_add.visible = True
-        self.btn_edit.visible = True
-        self.btn_delete.visible = True
+        self.btn_add.visible = self.current_sheet == SHEET_MOVEMENT
+        self.btn_edit.visible = False
+        self.btn_delete.visible = False
+        self.action_menu.visible = self.current_sheet == SHEET_MOVEMENT
         self.table_host.controls.clear()
         self.sheet_title.value = self.current_sheet
         self.file_label.value = (
@@ -1587,6 +1713,10 @@ class FletOblikApp:
         if TRANSACTION_ID_HEADER in visible_headers:
             visible_headers.remove(TRANSACTION_ID_HEADER)
             visible_headers.insert(0, TRANSACTION_ID_HEADER)
+        if OPERATION_TYPE_HEADER in visible_headers:
+            visible_headers.remove(OPERATION_TYPE_HEADER)
+            insert_at = 1 if TRANSACTION_ID_HEADER in visible_headers else 0
+            visible_headers.insert(insert_at, OPERATION_TYPE_HEADER)
         query = norm(self.search.value)
 
         duplicate_map = (
@@ -1670,30 +1800,31 @@ class FletOblikApp:
             for header in visible_headers
         ]
 
-        table = ft.DataTable(
+        table = fdt.DataTable2(
             columns=columns,
             rows=data_rows,
+            expand=True,
             show_checkbox_column=False,
             heading_row_color=ft.Colors.BLUE_50,
-            data_row_min_height=44,
-            data_row_max_height=72,
+            fixed_top_rows=1,
+            fixed_left_columns=1 if TRANSACTION_ID_HEADER in visible_headers else 0,
+            fixed_columns_color=ft.Colors.BLUE_GREY_50,
+            fixed_corner_color=ft.Colors.BLUE_100,
+            visible_horizontal_scroll_bar=True,
+            visible_vertical_scroll_bar=True,
+            min_width=max(1100, len(visible_headers) * 181),
+            heading_row_height=58,
+            data_row_height=64,
             column_spacing=8,
             horizontal_margin=8,
         )
 
-        # Постійний горизонтальний повзунок під широкою таблицею.
-        # ScrollbarOrientation.BOTTOM гарантує, що він завжди знаходиться знизу.
+        # DataTable2 тримає шапку зверху та ID транзакції зліва.
+        # Прокручується лише тіло таблиці, а обидва scrollbars завжди доступні.
         self.table_host.controls.append(
-            ft.Row(
-                controls=[table],
-                scroll=ft.Scrollbar(
-                    orientation=ft.ScrollbarOrientation.BOTTOM,
-                    thumb_visibility=True,
-                    track_visibility=True,
-                    interactive=True,
-                    thickness=12,
-                    radius=8,
-                ),
+            ft.Container(
+                expand=True,
+                content=table,
             )
         )
 
@@ -1716,10 +1847,460 @@ class FletOblikApp:
         self.selected_excel_row = excel_row if is_selected else None
         self._refresh_table()
 
+    def _selected_record_values(self) -> Optional[dict[str, Any]]:
+        if (
+            self.model.wb is None
+            or self.current_sheet != SHEET_MOVEMENT
+            or self.selected_excel_row is None
+        ):
+            self._show_message("Дія", "Спочатку виберіть запис у таблиці.")
+            return None
+        ws = self.model.wb[SHEET_MOVEMENT]
+        headers = self.model.headers(SHEET_MOVEMENT)
+        return {
+            header: ws.cell(self.selected_excel_row, i + 1).value
+            for i, header in enumerate(headers)
+        }
+
+    @staticmethod
+    def _append_action_note(existing: Any, line: str) -> str:
+        current = display_value(existing).strip()
+        return f"{current}\n{line}".strip() if current else line
+
+    def _create_action_transaction(
+        self,
+        base: dict[str, Any],
+        operation_type: str,
+        updates: dict[str, Any],
+        note_line: str = "",
+    ) -> int:
+        data = dict(base)
+        source_id = display_value(base.get(TRANSACTION_ID_HEADER)).strip()
+        data[TRANSACTION_ID_HEADER] = None
+        data[OPERATION_TYPE_HEADER] = operation_type
+        data.update(updates)
+        if note_line:
+            data["Примітка"] = self._append_action_note(
+                data.get("Примітка"),
+                note_line,
+            )
+        reason = (
+            f"{operation_type}; базова транзакція {source_id}"
+            if source_id
+            else operation_type
+        )
+        new_row = self.model.append_record(SHEET_MOVEMENT, data, reason)
+        try:
+            self.model.rebuild_current_state()
+        except Exception:
+            # Нова транзакція все одно зберігається; поточний стан можна
+            # перебудувати окремою кнопкою.
+            pass
+        self.selected_excel_row = new_row
+        self._refresh_table()
+        self._set_status(
+            f"Створено нову транзакцію: {operation_type}. "
+            "Не забудьте зберегти книгу."
+        )
+        return new_row
+
+    def _open_move_dialog(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        from_brigade = display_value(base.get(MAIN_HEADERS[19]))
+        from_subunit = display_value(base.get(MAIN_HEADERS[20]))
+        to_brigade = ft.TextField(label="Куди — підрозділ бригади")
+        to_subunit = ft.TextField(label="Куди — підрозділ батальйону/дивізіону")
+        doc_no = ft.TextField(label="Номер документа")
+        doc_date = ft.TextField(label="Дата документа", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_move(evt=None):
+            if not (to_brigade.value or "").strip() and not (to_subunit.value or "").strip():
+                self._show_message(
+                    "Переміщення",
+                    "Вкажіть хоча б один підрозділ призначення.",
+                )
+                return
+            updates = {
+                MAIN_HEADERS[19]: parse_user_value(MAIN_HEADERS[19], to_brigade.value or ""),
+                MAIN_HEADERS[20]: parse_user_value(MAIN_HEADERS[20], to_subunit.value or ""),
+                MAIN_HEADERS[21]: parse_user_value(MAIN_HEADERS[21], doc_no.value or ""),
+                MAIN_HEADERS[22]: parse_user_value(MAIN_HEADERS[22], doc_date.value or ""),
+            }
+            destination = " / ".join(
+                value for value in [
+                    (to_brigade.value or "").strip(),
+                    (to_subunit.value or "").strip(),
+                ]
+                if value
+            )
+            extra = (note.value or "").strip()
+            line = f"[Переміщення] → {destination}"
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, "Переміщення", updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Перемістити майно"),
+            content=ft.Container(
+                width=700,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Text(
+                            "Звідки: "
+                            + (" / ".join(x for x in [from_brigade, from_subunit] if x) or "не вказано"),
+                            color=ft.Colors.BLUE_GREY_700,
+                        ),
+                        to_brigade,
+                        to_subunit,
+                        ft.Row(controls=[doc_no, doc_date], spacing=8),
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити переміщення", icon=ft.Icons.SWAP_HORIZ, on_click=save_move),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_writeoff_dialog(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        order_no = ft.TextField(label="Номер наказу на списання")
+        order_date = ft.TextField(label="Дата наказу на списання", hint_text="дд.мм.рррр")
+        act_no = ft.TextField(label="Номер Єдиного акту списання")
+        act_date = ft.TextField(label="Дата Єдиного акту списання", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_writeoff(evt=None):
+            parsed_order_date = parse_user_value(MAIN_HEADERS[30], order_date.value or "")
+            parsed_act_date = parse_user_value(MAIN_HEADERS[32], act_date.value or "")
+            status_date = parsed_act_date or parsed_order_date
+            updates = {
+                MAIN_HEADERS[23]: "Списаний",
+                MAIN_HEADERS[24]: status_date,
+                MAIN_HEADERS[29]: parse_user_value(MAIN_HEADERS[29], order_no.value or ""),
+                MAIN_HEADERS[30]: parsed_order_date,
+                MAIN_HEADERS[31]: parse_user_value(MAIN_HEADERS[31], act_no.value or ""),
+                MAIN_HEADERS[32]: parsed_act_date,
+            }
+            details = []
+            if (order_no.value or "").strip():
+                details.append(f"наказ №{order_no.value.strip()}")
+            if (act_no.value or "").strip():
+                details.append(f"акт №{act_no.value.strip()}")
+            extra = (note.value or "").strip()
+            line = "[Списання]"
+            if details:
+                line += " " + ", ".join(details)
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, "Списання", updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Списати майно"),
+            content=ft.Container(
+                width=720,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Row(controls=[order_no, order_date], spacing=8),
+                        ft.Row(controls=[act_no, act_date], spacing=8),
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити списання", icon=ft.Icons.DELETE_SWEEP, on_click=save_writeoff),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_status_dialog(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        states = [
+            "Справний",
+            "Несправний",
+            "Переданий в ремонт",
+            "Знищений",
+            "Втрачений",
+            "Списаний",
+        ]
+        current = display_value(base.get(MAIN_HEADERS[23]))
+        status = ft.Dropdown(
+            label="Новий стан",
+            value=current if current in states else None,
+            options=[ft.DropdownOption(key=value, text=value) for value in states],
+        )
+        status_date = ft.TextField(label="Дата зміни стану", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_status(evt=None):
+            chosen = status.value or status.text or ""
+            if not chosen:
+                self._show_message("Зміна стану", "Оберіть новий стан.")
+                return
+            updates = {
+                MAIN_HEADERS[23]: chosen,
+                MAIN_HEADERS[24]: parse_user_value(MAIN_HEADERS[24], status_date.value or ""),
+            }
+            extra = (note.value or "").strip()
+            line = f"[Зміна стану] {chosen}"
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, "Зміна стану", updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Змінити стан майна"),
+            content=ft.Container(
+                width=620,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        status,
+                        status_date,
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити транзакцію", icon=ft.Icons.HEALTH_AND_SAFETY, on_click=save_status),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_stock_quantity_dialog(self, operation_type: str, sign: int):
+        base = self._selected_record_values()
+        if not base:
+            return
+        if "запас" not in norm(base.get(MAIN_HEADERS[8])):
+            self._show_message(
+                operation_type,
+                "Ця дія доступна для записів із типом майна «Запас».",
+            )
+            return
+
+        quantity = ft.TextField(label="Кількість")
+        destination = ft.TextField(
+            label="Кому / підрозділ",
+            hint_text="Для повернення можна вказати склад або підрозділ",
+        )
+        doc_no = ft.TextField(label="Номер документа")
+        doc_date = ft.TextField(label="Дата документа", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_stock(evt=None):
+            qty = numeric_value(quantity.value)
+            if qty is None or qty <= 0:
+                self._show_message(operation_type, "Вкажіть кількість більше нуля.")
+                return
+            signed_qty = abs(qty) * sign
+            updates = {
+                MAIN_HEADERS[16]: signed_qty,
+                MAIN_HEADERS[20]: parse_user_value(MAIN_HEADERS[20], destination.value or ""),
+                MAIN_HEADERS[21]: parse_user_value(MAIN_HEADERS[21], doc_no.value or ""),
+                MAIN_HEADERS[22]: parse_user_value(MAIN_HEADERS[22], doc_date.value or ""),
+            }
+            extra = (note.value or "").strip()
+            line = f"[{operation_type}] {abs(qty):g}"
+            if (destination.value or "").strip():
+                line += f" → {destination.value.strip()}"
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, operation_type, updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(operation_type),
+            content=ft.Container(
+                width=650,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            "Кількісний залишок запасів ще не агрегується автоматично; "
+                            "ця дія вже створює окрему транзакцію руху.",
+                            color=ft.Colors.ORANGE_800,
+                        ),
+                        quantity,
+                        destination,
+                        ft.Row(controls=[doc_no, doc_date], spacing=8),
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити транзакцію", icon=ft.Icons.SAVE, on_click=save_stock),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_issue_stock_dialog(self, e=None):
+        self._open_stock_quantity_dialog("Видача", -1)
+
+    def _open_return_stock_dialog(self, e=None):
+        self._open_stock_quantity_dialog("Повернення", 1)
+
+    def _show_selected_history(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        df = self.model.dataframe(SHEET_MOVEMENT)
+        inv = norm(base.get(MAIN_HEADERS[9]))
+        serial = norm(base.get(MAIN_HEADERS[18]))
+        code = norm(base.get(MAIN_HEADERS[7]))
+        name = norm(base.get(MAIN_HEADERS[12]) or base.get(MAIN_HEADERS[11]))
+
+        def same_asset(row) -> bool:
+            if inv:
+                return norm(row.get(MAIN_HEADERS[9])) == inv
+            if serial:
+                return (
+                    norm(row.get(MAIN_HEADERS[18])) == serial
+                    and norm(row.get(MAIN_HEADERS[12]) or row.get(MAIN_HEADERS[11])) == name
+                )
+            return (
+                bool(code or name)
+                and (not code or norm(row.get(MAIN_HEADERS[7])) == code)
+                and (not name or norm(row.get(MAIN_HEADERS[12]) or row.get(MAIN_HEADERS[11])) == name)
+            )
+
+        records = [
+            row for _, row in df.iterrows()
+            if same_asset(row)
+        ]
+
+        def event_date(row) -> str:
+            for header in (
+                MAIN_HEADERS[32],
+                MAIN_HEADERS[30],
+                MAIN_HEADERS[24],
+                MAIN_HEADERS[22],
+                MAIN_HEADERS[4],
+            ):
+                value = row.get(header)
+                if not is_blank(value):
+                    return display_value(value)
+            return ""
+
+        cards = []
+        for row in reversed(records):
+            location = " / ".join(
+                value for value in [
+                    display_value(row.get(MAIN_HEADERS[19])).strip(),
+                    display_value(row.get(MAIN_HEADERS[20])).strip(),
+                ]
+                if value
+            )
+            document = (
+                display_value(row.get(MAIN_HEADERS[31])).strip()
+                or display_value(row.get(MAIN_HEADERS[29])).strip()
+                or display_value(row.get(MAIN_HEADERS[21])).strip()
+                or display_value(row.get(MAIN_HEADERS[3])).strip()
+            )
+            cards.append(
+                ft.Container(
+                    padding=12,
+                    border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+                    border_radius=10,
+                    content=ft.Column(
+                        spacing=4,
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    ft.Text(
+                                        display_value(row.get(TRANSACTION_ID_HEADER)),
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    ft.Text(
+                                        display_value(row.get(OPERATION_TYPE_HEADER)) or "Запис",
+                                        color=ft.Colors.BLUE_700,
+                                    ),
+                                    ft.Container(expand=True),
+                                    ft.Text(event_date(row), color=ft.Colors.BLUE_GREY_600),
+                                ]
+                            ),
+                            ft.Text(
+                                f"Документ: {document or '—'} | "
+                                f"Кількість: {display_value(row.get(MAIN_HEADERS[16])) or '—'}"
+                            ),
+                            ft.Text(
+                                f"Місце: {location or '—'} | "
+                                f"Стан: {display_value(row.get(MAIN_HEADERS[23])) or '—'}"
+                            ),
+                            ft.Text(
+                                display_value(row.get("Примітка")),
+                                color=ft.Colors.BLUE_GREY_700,
+                            ) if display_value(row.get("Примітка")).strip() else ft.Container(),
+                        ],
+                    ),
+                )
+            )
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Історія: "
+                + (
+                    display_value(base.get(MAIN_HEADERS[9]))
+                    or display_value(base.get(MAIN_HEADERS[18]))
+                    or display_value(base.get(MAIN_HEADERS[12]))
+                    or "майно"
+                )
+            ),
+            content=ft.Container(
+                width=900,
+                height=560,
+                content=ft.Column(
+                    controls=cards or [ft.Text("Історію не знайдено.")],
+                    scroll=ft.ScrollMode.AUTO,
+                    spacing=8,
+                ),
+            ),
+            actions=[
+                ft.TextButton("Закрити", on_click=lambda evt: self.page.pop_dialog()),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
     def _display_headers_for_form(self, headers: list[str]) -> list[str]:
         result = [
             h for h in headers
-            if h not in ("№ з/п", TRANSACTION_ID_HEADER)
+            if h not in ("№ з/п", TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER)
         ]
         if "Ціна" in result and "Кількість" in result:
             result.remove("Кількість")
@@ -1980,6 +2561,7 @@ class FletOblikApp:
                     "Переданий в ремонт",
                     "Знищений",
                     "Втрачений",
+                    "Списаний",
                 ]
                 control = ft.Dropdown(
                     editable=True,
