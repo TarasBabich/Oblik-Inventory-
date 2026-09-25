@@ -1681,10 +1681,19 @@ class FletOblikApp:
             horizontal_margin=8,
         )
 
+        # Постійний горизонтальний повзунок під широкою таблицею.
+        # ScrollbarOrientation.BOTTOM гарантує, що він завжди знаходиться знизу.
         self.table_host.controls.append(
             ft.Row(
                 controls=[table],
-                scroll=ft.ScrollMode.AUTO,
+                scroll=ft.Scrollbar(
+                    orientation=ft.ScrollbarOrientation.BOTTOM,
+                    thumb_visibility=True,
+                    track_visibility=True,
+                    interactive=True,
+                    thickness=12,
+                    radius=8,
+                ),
             )
         )
 
