@@ -21,7 +21,6 @@ from __future__ import annotations
 import getpass
 import json
 import sys
-import uuid
 from collections import defaultdict
 from copy import copy, deepcopy
 from dataclasses import dataclass
@@ -37,7 +36,7 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.5"
+APP_VERSION = "0.2.6"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -200,9 +199,32 @@ def calculate_unit_price(total: Any, quantity: Any) -> Optional[float]:
     return total_value / qty_value
 
 
-def generate_transaction_id() -> str:
-    """Стабільний унікальний ID облікової операції."""
-    return "TX-" + uuid.uuid4().hex.upper()
+def transaction_sequence_width(number: int) -> int:
+    """Ширина номера блоками по 3 цифри: 001 ... 999, 001000 ..."""
+    digits = len(str(max(1, int(number))))
+    return ((digits + 2) // 3) * 3
+
+
+def format_transaction_id(number: int) -> str:
+    number = max(1, int(number))
+    width = transaction_sequence_width(number)
+    return f"TX-{number:0{width}d}"
+
+
+def parse_transaction_sequence(value: Any) -> Optional[int]:
+    text = str(value or "").strip().upper()
+    if not text.startswith("TX-"):
+        return None
+    numeric = text[3:]
+    if not numeric.isdigit():
+        return None
+    number = int(numeric)
+    return number if number > 0 else None
+
+
+def generate_transaction_id(number: int) -> str:
+    """Послідовний стабільний ID облікової операції."""
+    return format_transaction_id(number)
 
 
 def safe_positive_int(value: Any, default: int = 1, maximum: Optional[int] = None) -> int:
@@ -364,7 +386,7 @@ class OblikWorkbook:
         ws.cell(1, col, TRANSACTION_ID_HEADER)
         if col > 1 and ws.cell(1, col - 1).has_style:
             ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
-        ws.column_dimensions[get_column_letter(col)].width = 38
+        ws.column_dimensions[get_column_letter(col)].width = 18
         ws.auto_filter.ref = f"A1:{get_column_letter(col)}1"
         return True
 
@@ -376,33 +398,84 @@ class OblikWorkbook:
         ws.cell(1, col, TRANSACTION_ID_HEADER)
         if col > 1 and ws.cell(1, col - 1).has_style:
             ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
-        ws.column_dimensions[get_column_letter(col)].width = 38
+        ws.column_dimensions[get_column_letter(col)].width = 18
         return True
 
+    def _next_transaction_sequence(self) -> int:
+        """Наступний номер з урахуванням руху й аудиту, тому видалені ID не повторюються."""
+        largest = 0
+        for sheet_name in (SHEET_MOVEMENT, SHEET_CHANGES):
+            ws = self.wb[sheet_name]
+            headers = self.headers(sheet_name)
+            if TRANSACTION_ID_HEADER not in headers:
+                continue
+            tx_col = headers.index(TRANSACTION_ID_HEADER) + 1
+            for row in range(2, ws.max_row + 1):
+                sequence = parse_transaction_sequence(ws.cell(row, tx_col).value)
+                if sequence is not None:
+                    largest = max(largest, sequence)
+        return largest + 1
+
+    def _replace_transaction_id_in_sheet(
+        self,
+        sheet_name: str,
+        old_id: str,
+        new_id: str,
+    ) -> bool:
+        ws = self.wb[sheet_name]
+        headers = self.headers(sheet_name)
+        if TRANSACTION_ID_HEADER not in headers:
+            return False
+        tx_col = headers.index(TRANSACTION_ID_HEADER) + 1
+        changed = False
+        wanted = norm(old_id)
+        for row in range(2, ws.max_row + 1):
+            if norm(ws.cell(row, tx_col).value) == wanted:
+                ws.cell(row, tx_col, new_id)
+                changed = True
+        return changed
+
     def _ensure_transaction_ids(self) -> bool:
-        """Доприсвоює ID старим операціям та виправляє випадкові дублікати ID."""
+        """Мігрує UUID/порожні ID у послідовні TX-001, TX-002 ... без повторного перенумерування."""
         ws = self.wb[SHEET_MOVEMENT]
         headers = self.headers(SHEET_MOVEMENT)
         if TRANSACTION_ID_HEADER not in headers:
             return False
         tx_col = headers.index(TRANSACTION_ID_HEADER) + 1
         changed = False
-        seen: set[str] = set()
+        seen_sequences: set[int] = set()
+
+        # Спочатку визначаємо найбільший уже чинний послідовний номер.
+        next_sequence = self._next_transaction_sequence()
 
         for row in range(2, ws.max_row + 1):
-            # ID створюється тільки для реального запису руху, а не порожнього рядка.
             if not self._row_has_data(ws, row, 2, tx_col - 1):
                 continue
+
             current = str(ws.cell(row, tx_col).value or "").strip()
-            normalized = norm(current)
-            if not current or normalized in seen:
-                current = generate_transaction_id()
-                while norm(current) in seen:
-                    current = generate_transaction_id()
-                ws.cell(row, tx_col, current)
-                normalized = norm(current)
-                changed = True
-            seen.add(normalized)
+            sequence = parse_transaction_sequence(current)
+            if sequence is not None and sequence not in seen_sequences:
+                seen_sequences.add(sequence)
+                continue
+
+            new_id = format_transaction_id(next_sequence)
+            while next_sequence in seen_sequences or self._transaction_id_exists(
+                new_id, ignore_excel_row=row
+            ):
+                next_sequence += 1
+                new_id = format_transaction_id(next_sequence)
+
+            old_id = current
+            ws.cell(row, tx_col, new_id)
+            seen_sequences.add(next_sequence)
+            next_sequence += 1
+            changed = True
+
+            # Для старих UUID синхронно оновлюємо посилання в журналі та поточному стані.
+            if old_id and parse_transaction_sequence(old_id) is None:
+                self._replace_transaction_id_in_sheet(SHEET_CHANGES, old_id, new_id)
+                self._replace_transaction_id_in_sheet(SHEET_CURRENT, old_id, new_id)
+
         return changed
 
     def _transaction_id_exists(self, transaction_id: Any, ignore_excel_row: Optional[int] = None) -> bool:
@@ -471,11 +544,11 @@ class OblikWorkbook:
         headers = self.headers(sheet_name)
         values = dict(values)
         if sheet_name == SHEET_MOVEMENT:
-            transaction_id = str(values.get(TRANSACTION_ID_HEADER) or "").strip()
-            if not transaction_id or self._transaction_id_exists(transaction_id):
-                transaction_id = generate_transaction_id()
-                while self._transaction_id_exists(transaction_id):
-                    transaction_id = generate_transaction_id()
+            sequence = self._next_transaction_sequence()
+            transaction_id = format_transaction_id(sequence)
+            while self._transaction_id_exists(transaction_id):
+                sequence += 1
+                transaction_id = format_transaction_id(sequence)
             values[TRANSACTION_ID_HEADER] = transaction_id
         start_row = 2
         row = self._first_empty_data_row(ws, start_row)
