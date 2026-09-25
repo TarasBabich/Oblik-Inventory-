@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number)
 import pandas as pd
 import flet as ft
 
@@ -36,6 +36,21 @@ def main():
     assert abs(unit_price * 3 - 100) < 1e-10
     assert calculate_unit_price(100, 0) is None
 
+    assert format_inventory_number("ОВТ-", 25, 6) == "ОВТ-000025"
+    assert format_inventory_number("100-", 7, 4, "/26") == "100-0007/26"
+    inv_settings = {
+        "inventory_prefix": "ОВТ-",
+        "inventory_suffix": "",
+        "inventory_next_number": "1",
+        "inventory_digits": "4",
+    }
+    candidate, counter = next_inventory_number(
+        inv_settings,
+        ["ОВТ-0001", "ОВТ-0002", "ОВТ-0004"],
+    )
+    assert candidate == "ОВТ-0003"
+    assert counter == 3
+
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "test.xlsx"
         settings = AppSettingsStore()
@@ -45,6 +60,10 @@ def main():
             "commander_rank": "полковник",
             "commander_name": "Тестовий Командир",
             "document_start_number": "25",
+            "inventory_prefix": "ОВТ-",
+            "inventory_suffix": "/26",
+            "inventory_next_number": "15",
+            "inventory_digits": "5",
             "index_coefficient_2023": "1.10",
             "index_coefficient_2024": "1.25",
             "index_coefficient_2025": "1.40",
@@ -62,6 +81,10 @@ def main():
         assert loaded_settings["commander_rank"] == "полковник"
         assert loaded_settings["commander_name"] == "Тестовий Командир"
         assert loaded_settings["document_start_number"] == "25"
+        assert loaded_settings["inventory_prefix"] == "ОВТ-"
+        assert loaded_settings["inventory_suffix"] == "/26"
+        assert loaded_settings["inventory_next_number"] == "15"
+        assert loaded_settings["inventory_digits"] == "5"
         assert loaded_settings["index_coefficient_2023"] == "1.10"
         assert loaded_settings["index_coefficient_2024"] == "1.25"
         assert loaded_settings["index_coefficient_2025"] == "1.40"
