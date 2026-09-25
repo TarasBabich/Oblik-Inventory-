@@ -36,7 +36,7 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.2.4"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -64,6 +64,10 @@ DEFAULT_APP_SETTINGS = {
     "index_coefficient_2025": "",
     "document_prefix": "",
     "document_start_number": "1",
+    "inventory_prefix": "",
+    "inventory_suffix": "",
+    "inventory_next_number": "1",
+    "inventory_digits": "6",
     "commission_chair_position": "",
     "commission_chair_rank": "",
     "commission_chair_name": "",
@@ -191,6 +195,36 @@ def calculate_unit_price(total: Any, quantity: Any) -> Optional[float]:
     if total_value is None or qty_value is None or qty_value == 0:
         return None
     return total_value / qty_value
+
+
+def safe_positive_int(value: Any, default: int = 1, maximum: Optional[int] = None) -> int:
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        number = default
+    if number < 1:
+        number = default
+    if maximum is not None:
+        number = min(number, maximum)
+    return number
+
+
+def format_inventory_number(prefix: Any, number: int, digits: Any = 6, suffix: Any = "") -> str:
+    width = safe_positive_int(digits, 6, 18)
+    return f"{str(prefix or '').strip()}{number:0{width}d}{str(suffix or '').strip()}"
+
+
+def next_inventory_number(settings: dict[str, Any], used_values: list[Any]) -> tuple[str, int]:
+    prefix = settings.get("inventory_prefix", "")
+    suffix = settings.get("inventory_suffix", "")
+    digits = settings.get("inventory_digits", "6")
+    number = safe_positive_int(settings.get("inventory_next_number", "1"), 1)
+    used = {norm(value) for value in used_values if norm(value)}
+    while True:
+        candidate = format_inventory_number(prefix, number, digits, suffix)
+        if norm(candidate) not in used:
+            return candidate, number
+        number += 1
 
 
 def parse_user_value(header: str, text: str) -> Any:
@@ -1089,6 +1123,61 @@ class FletOblikApp:
             ],
         )
 
+        inventory_prefix_field = self._settings_field(
+            "inventory_prefix", "Префікс інвентарного номера", "Наприклад: ОВТ-"
+        )
+        inventory_suffix_field = self._settings_field(
+            "inventory_suffix", "Суфікс інвентарного номера", "Наприклад: /26"
+        )
+        inventory_next_field = self._settings_field(
+            "inventory_next_number", "Наступний порядковий номер", "Наприклад: 1"
+        )
+        inventory_digits_field = self._settings_field(
+            "inventory_digits", "Кількість цифр у номері", "Наприклад: 6"
+        )
+        inventory_preview = ft.Text(
+            "",
+            size=14,
+            weight=ft.FontWeight.W_600,
+            color=ft.Colors.BLUE_GREY_800,
+        )
+
+        def refresh_inventory_preview(e=None):
+            number = safe_positive_int(inventory_next_field.value, 1)
+            inventory_preview.value = (
+                "Приклад: "
+                + format_inventory_number(
+                    inventory_prefix_field.value,
+                    number,
+                    inventory_digits_field.value,
+                    inventory_suffix_field.value,
+                )
+            )
+            self.page.update()
+
+        inventory_prefix_field.on_change = refresh_inventory_preview
+        inventory_suffix_field.on_change = refresh_inventory_preview
+        inventory_next_field.on_change = refresh_inventory_preview
+        inventory_digits_field.on_change = refresh_inventory_preview
+        refresh_inventory_preview()
+
+        inventory_generator_card = self._settings_card(
+            "Генератор інвентарних номерів",
+            "Формат наступного інвентарного номера. При генерації програма автоматично пропускає номери, які вже є в «Рух майна».",
+            [
+                inventory_prefix_field,
+                inventory_suffix_field,
+                inventory_next_field,
+                inventory_digits_field,
+                inventory_preview,
+                ft.Text(
+                    "Наприклад: префікс ОВТ-, номер 25, 6 цифр → ОВТ-000025.",
+                    size=12,
+                    color=ft.Colors.BLUE_GREY_600,
+                ),
+            ],
+        )
+
         numbering_card = self._settings_card(
             "Нумерація документів",
             "Загальні параметри, які можна використовувати при автоматичному формуванні документів.",
@@ -1271,6 +1360,7 @@ class FletOblikApp:
                         finance_card,
                         coefficients_card,
                         commission_card,
+                        inventory_generator_card,
                         numbering_card,
                         ft.Row(
                             alignment=ft.MainAxisAlignment.END,
@@ -1510,6 +1600,8 @@ class FletOblikApp:
             "calculated_price": numeric_value(values.get("Ціна")),
             "calculated_sum": None,
             "warnings_acknowledged": False,
+            "generated_inventory": None,
+            "generated_inventory_counter": None,
         }
         field_controls: dict[str, ft.Control] = {}
 
@@ -1619,6 +1711,40 @@ class FletOblikApp:
 
         mode_button.on_click = toggle_mode
 
+        inventory_input = ft.TextField(
+            value=display_value(values.get(MAIN_HEADERS[9])),
+            expand=True,
+        )
+
+        def generate_inventory(e=None):
+            try:
+                movement = self.model.dataframe(SHEET_MOVEMENT)
+                used_values = (
+                    movement[MAIN_HEADERS[9]].tolist()
+                    if not movement.empty and MAIN_HEADERS[9] in movement.columns
+                    else []
+                )
+                candidate, counter = next_inventory_number(self.settings, used_values)
+                inventory_input.value = candidate
+                state["generated_inventory"] = candidate
+                state["generated_inventory_counter"] = counter
+                warning_text.visible = False
+                self.page.update()
+            except Exception as exc:
+                self._show_message("Генератор інвентарних номерів", str(exc))
+
+        inventory_host = ft.Row(
+            controls=[
+                inventory_input,
+                ft.Button(
+                    content="Згенерувати",
+                    icon=ft.Icons.AUTO_AWESOME,
+                    on_click=generate_inventory,
+                ),
+            ],
+            spacing=8,
+        )
+
         form_rows = []
         display_headers = self._display_headers_for_form(headers)
         for header in display_headers:
@@ -1635,6 +1761,9 @@ class FletOblikApp:
                 control = price_host
             elif header == "Сума":
                 control = sum_host
+            elif header == MAIN_HEADERS[9]:
+                control = inventory_input
+                display_control = inventory_host
             elif header == MAIN_HEADERS[8]:
                 current_text = display_value(current)
                 options = ["", "Необоротний актив", "Запас"]
@@ -1686,15 +1815,18 @@ class FletOblikApp:
                 )
 
             field_controls[header] = control
+            shown_control = locals().get("display_control", control)
             form_rows.append(
                 ft.Row(
                     vertical_alignment=ft.CrossAxisAlignment.START,
                     controls=[
                         ft.Container(width=285, padding=8, content=label),
-                        ft.Container(expand=True, content=control),
+                        ft.Container(expand=True, content=shown_control),
                     ],
                 )
             )
+            if "display_control" in locals():
+                del display_control
 
             if header == "Кількість":
                 form_rows.append(
@@ -1734,6 +1866,17 @@ class FletOblikApp:
                         f"Змінено полів: {len(changes)}. "
                         "Зміни внесено до 'Контроль змін'."
                     )
+                generated_value = state.get("generated_inventory")
+                generated_counter = state.get("generated_inventory_counter")
+                if (
+                    generated_value
+                    and generated_counter is not None
+                    and norm(data.get(MAIN_HEADERS[9])) == norm(generated_value)
+                ):
+                    self.settings["inventory_next_number"] = str(int(generated_counter) + 1)
+                    self.settings_store.save(self.settings)
+                    self.settings = self.settings_store.load()
+
                 self.page.pop_dialog()
                 self.selected_excel_row = None
                 self._refresh_table()
