@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, generate_transaction_id)
 import pandas as pd
 import flet as ft
 
@@ -35,6 +35,9 @@ def main():
     assert unit_price is not None
     assert abs(unit_price * 3 - 100) < 1e-10
     assert calculate_unit_price(100, 0) is None
+    generated_tx = generate_transaction_id()
+    assert generated_tx.startswith("TX-")
+    assert len(generated_tx) == 35
 
     assert format_inventory_number("ОВТ-", 25, 6) == "ОВТ-000025"
     assert format_inventory_number("100-", 7, 4, "/26") == "100-0007/26"
@@ -102,6 +105,9 @@ def main():
         assert row1 == 2
         assert ws_move[f"A{row1}"].value == "=ROW()-1"
         assert ws_move[f"R{row1}"].value == f"=P{row1}*Q{row1}"
+        tx_col = model.headers(SHEET_MOVEMENT).index(TRANSACTION_ID_HEADER) + 1
+        tx1 = ws_move.cell(row1, tx_col).value
+        assert str(tx1).startswith("TX-")
         assert display_value(pd.NaT) == ""
 
         # Як і в інтерфейсі: перевіряємо майбутній запис ДО його збереження.
@@ -111,6 +117,9 @@ def main():
         row2 = model.append_record(SHEET_MOVEMENT, r2, "test")
         assert ws_move[f"A{row2}"].value == "=ROW()-1"
         assert ws_move[f"R{row2}"].value == f"=P{row2}*Q{row2}"
+        tx2 = ws_move.cell(row2, tx_col).value
+        assert str(tx2).startswith("TX-")
+        assert tx2 != tx1
 
         count, skipped = model.rebuild_current_state()
         assert count == 1
@@ -126,9 +135,27 @@ def main():
         edited[MAIN_HEADERS[18]] = "SN-001-CORRECTED"
         changes = model.update_record(SHEET_MOVEMENT, first_row, edited, "уточнення")
         assert any(field == MAIN_HEADERS[18] for field, _, _ in changes)
-        assert len(model.dataframe(SHEET_CHANGES)) >= 3
+        assert ws_move.cell(first_row, tx_col).value == tx1
 
+        audit = model.dataframe(SHEET_CHANGES)
+        assert len(audit) >= 3
+        assert TRANSACTION_ID_HEADER in audit.columns
+        assert tx1 in set(audit[TRANSACTION_ID_HEADER].dropna().astype(str))
+
+        # Симулюємо старий рядок без ID: при наступному відкритті він має
+        # отримати ID автоматично, не змінюючи Excel-рядок чи формули.
+        ws_move.cell(row2, tx_col).value = None
         model.save()
+        reloaded = OblikWorkbook()
+        reloaded.load(path)
+        reloaded_ws = reloaded.wb[SHEET_MOVEMENT]
+        restored_tx2 = reloaded_ws.cell(row2, tx_col).value
+        assert str(restored_tx2).startswith("TX-")
+        assert restored_tx2 != tx1
+        assert reloaded_ws[f"A{row2}"].value == "=ROW()-1"
+        assert reloaded_ws[f"R{row2}"].value == f"=P{row2}*Q{row2}"
+
+        reloaded.save()
         assert path.exists() and path.stat().st_size > 0
 
 
