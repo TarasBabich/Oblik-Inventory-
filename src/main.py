@@ -21,6 +21,7 @@ from __future__ import annotations
 import getpass
 import json
 import sys
+import uuid
 from collections import defaultdict
 from copy import copy, deepcopy
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.4"
+APP_VERSION = "0.2.5"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -45,6 +46,7 @@ SHEET_SUMMARY = "Зведений"
 SHEET_CHANGES = "Контроль змін"
 REQUIRED_SHEETS = [SHEET_STAFF, SHEET_MOVEMENT, SHEET_CURRENT, SHEET_SUMMARY, SHEET_CHANGES]
 SETTINGS_VIEW = "Налаштування"
+TRANSACTION_ID_HEADER = "ID транзакції"
 
 DEFAULT_APP_SETTINGS = {
     "unit_number": "",
@@ -109,12 +111,13 @@ MAIN_HEADERS = [
     "Номер Єдиного акту списання",
     "Дата єдиного акту списання",
     "Примітка",
+    TRANSACTION_ID_HEADER,
 ]
 
 CHANGE_HEADERS = [
     "№ з/п", "Дата і час", "Тип активу", "Таблиця", "Інв. №",
     "Найменування майна", "Поле", "Було написано", "Стало написано",
-    "Тип зміни", "Причина", "Користувач",
+    "Тип зміни", "Причина", "Користувач", TRANSACTION_ID_HEADER,
 ]
 
 STAFF_HEADERS = [
@@ -195,6 +198,11 @@ def calculate_unit_price(total: Any, quantity: Any) -> Optional[float]:
     if total_value is None or qty_value is None or qty_value == 0:
         return None
     return total_value / qty_value
+
+
+def generate_transaction_id() -> str:
+    """Стабільний унікальний ID облікової операції."""
+    return "TX-" + uuid.uuid4().hex.upper()
 
 
 def safe_positive_int(value: Any, default: int = 1, maximum: Optional[int] = None) -> int:
@@ -333,11 +341,83 @@ class OblikWorkbook:
                 ws.delete_rows(2, 1)
                 migrated = True
 
+            if self._ensure_main_sheet_schema(ws):
+                migrated = True
+
             # Після міграції/відкриття приводимо розрахункові колонки до правил.
             self._restore_row_formulas(ws)
 
+        if self._ensure_change_sheet_schema(self.wb[SHEET_CHANGES]):
+            migrated = True
+        if self._ensure_transaction_ids():
+            migrated = True
+
         self.path = path
         self.dirty = migrated
+
+    def _ensure_main_sheet_schema(self, ws) -> bool:
+        """Додає нові технічні колонки без зсуву наявної Excel-структури."""
+        headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
+        if TRANSACTION_ID_HEADER in headers:
+            return False
+        col = ws.max_column + 1
+        ws.cell(1, col, TRANSACTION_ID_HEADER)
+        if col > 1 and ws.cell(1, col - 1).has_style:
+            ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
+        ws.column_dimensions[get_column_letter(col)].width = 38
+        ws.auto_filter.ref = f"A1:{get_column_letter(col)}1"
+        return True
+
+    def _ensure_change_sheet_schema(self, ws) -> bool:
+        headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
+        if TRANSACTION_ID_HEADER in headers:
+            return False
+        col = ws.max_column + 1
+        ws.cell(1, col, TRANSACTION_ID_HEADER)
+        if col > 1 and ws.cell(1, col - 1).has_style:
+            ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
+        ws.column_dimensions[get_column_letter(col)].width = 38
+        return True
+
+    def _ensure_transaction_ids(self) -> bool:
+        """Доприсвоює ID старим операціям та виправляє випадкові дублікати ID."""
+        ws = self.wb[SHEET_MOVEMENT]
+        headers = self.headers(SHEET_MOVEMENT)
+        if TRANSACTION_ID_HEADER not in headers:
+            return False
+        tx_col = headers.index(TRANSACTION_ID_HEADER) + 1
+        changed = False
+        seen: set[str] = set()
+
+        for row in range(2, ws.max_row + 1):
+            # ID створюється тільки для реального запису руху, а не порожнього рядка.
+            if not self._row_has_data(ws, row, 2, tx_col - 1):
+                continue
+            current = str(ws.cell(row, tx_col).value or "").strip()
+            normalized = norm(current)
+            if not current or normalized in seen:
+                current = generate_transaction_id()
+                while norm(current) in seen:
+                    current = generate_transaction_id()
+                ws.cell(row, tx_col, current)
+                normalized = norm(current)
+                changed = True
+            seen.add(normalized)
+        return changed
+
+    def _transaction_id_exists(self, transaction_id: Any, ignore_excel_row: Optional[int] = None) -> bool:
+        wanted = norm(transaction_id)
+        if not wanted or self.wb is None:
+            return False
+        df = self.dataframe(SHEET_MOVEMENT)
+        if df.empty or TRANSACTION_ID_HEADER not in df.columns:
+            return False
+        for _, row in df.iterrows():
+            if ignore_excel_row and int(row["_excel_row"]) == ignore_excel_row:
+                continue
+            if norm(row.get(TRANSACTION_ID_HEADER)) == wanted:
+                return True
+        return False
 
     def save(self, path: Optional[Path] = None) -> None:
         if self.wb is None:
@@ -389,6 +469,14 @@ class OblikWorkbook:
     def append_record(self, sheet_name: str, values: dict[str, Any], reason: str = "") -> int:
         ws = self.wb[sheet_name]
         headers = self.headers(sheet_name)
+        values = dict(values)
+        if sheet_name == SHEET_MOVEMENT:
+            transaction_id = str(values.get(TRANSACTION_ID_HEADER) or "").strip()
+            if not transaction_id or self._transaction_id_exists(transaction_id):
+                transaction_id = generate_transaction_id()
+                while self._transaction_id_exists(transaction_id):
+                    transaction_id = generate_transaction_id()
+            values[TRANSACTION_ID_HEADER] = transaction_id
         start_row = 2
         row = self._first_empty_data_row(ws, start_row)
         template_row = start_row
@@ -420,7 +508,7 @@ class OblikWorkbook:
         changes = []
 
         for i, header in enumerate(headers, 1):
-            if header in ("№ з/п", "Сума"):
+            if header in ("№ з/п", "Сума", TRANSACTION_ID_HEADER):
                 continue
             old = old_values.get(header)
             new = new_values.get(header)
@@ -436,6 +524,7 @@ class OblikWorkbook:
             self.dirty = True
             merged = dict(old_values)
             merged.update(new_values)
+            merged[TRANSACTION_ID_HEADER] = old_values.get(TRANSACTION_ID_HEADER, "")
             for field, old, new in changes:
                 self._log_change(merged, sheet_name, field, old, new, "Виправлення", reason)
         return changes
@@ -451,7 +540,7 @@ class OblikWorkbook:
         self._log_change(old_values, sheet_name, "Весь запис", summary, "", "Видалення", reason)
 
     def _record_summary(self, values: dict[str, Any]) -> str:
-        keys = [MAIN_HEADERS[9], MAIN_HEADERS[18], MAIN_HEADERS[12], MAIN_HEADERS[16], MAIN_HEADERS[19], MAIN_HEADERS[20]]
+        keys = [TRANSACTION_ID_HEADER, MAIN_HEADERS[9], MAIN_HEADERS[18], MAIN_HEADERS[12], MAIN_HEADERS[16], MAIN_HEADERS[19], MAIN_HEADERS[20]]
         parts = []
         for key in keys:
             value = values.get(key)
@@ -463,7 +552,10 @@ class OblikWorkbook:
         ws = self.wb[SHEET_CHANGES]
         row = 2
         while row <= max(ws.max_row + 1, 2):
-            if not any(ws.cell(row, col).value not in (None, "") for col in range(2, 13)):
+            if not any(
+                ws.cell(row, col).value not in (None, "")
+                for col in range(2, len(CHANGE_HEADERS) + 1)
+            ):
                 break
             row += 1
 
@@ -479,7 +571,7 @@ class OblikWorkbook:
             record.get(MAIN_HEADERS[9], ""),
             record.get(MAIN_HEADERS[12], "") or record.get(MAIN_HEADERS[11], ""),
             field, display_value(old), display_value(new), change_type,
-            reason, getpass.getuser(),
+            reason, getpass.getuser(), record.get(TRANSACTION_ID_HEADER, ""),
         ]
         for col, value in enumerate(vals, 1):
             ws.cell(row, col, value)
@@ -1419,6 +1511,9 @@ class FletOblikApp:
         df = self.model.dataframe(self.current_sheet)
         headers = self.model.headers(self.current_sheet)
         visible_headers = [h for h in headers if h != "№ з/п"]
+        if TRANSACTION_ID_HEADER in visible_headers:
+            visible_headers.remove(TRANSACTION_ID_HEADER)
+            visible_headers.insert(0, TRANSACTION_ID_HEADER)
         query = norm(self.search.value)
 
         duplicate_map = (
@@ -1540,7 +1635,10 @@ class FletOblikApp:
         self._refresh_table()
 
     def _display_headers_for_form(self, headers: list[str]) -> list[str]:
-        result = [h for h in headers if h != "№ з/п"]
+        result = [
+            h for h in headers
+            if h not in ("№ з/п", TRANSACTION_ID_HEADER)
+        ]
         if "Ціна" in result and "Кількість" in result:
             result.remove("Кількість")
             result.insert(result.index("Ціна"), "Кількість")
@@ -1745,7 +1843,21 @@ class FletOblikApp:
             spacing=8,
         )
 
-        form_rows = []
+        form_rows = [
+            ft.Container(
+                padding=ft.Padding.only(bottom=8),
+                content=ft.Text(
+                    (
+                        "ID транзакції: "
+                        + str(values.get(TRANSACTION_ID_HEADER) or "")
+                        if excel_row is not None
+                        else "ID транзакції буде створено автоматично після збереження"
+                    ),
+                    size=12,
+                    color=ft.Colors.BLUE_GREY_600,
+                ),
+            )
+        ]
         display_headers = self._display_headers_for_form(headers)
         for header in display_headers:
             current = values.get(header)
