@@ -36,7 +36,7 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -59,6 +59,9 @@ DEFAULT_APP_SETTINGS = {
     "finance_chief_position": "Начальник фінансово-економічної служби",
     "finance_chief_rank": "",
     "finance_chief_name": "",
+    "index_coefficient_2023": "",
+    "index_coefficient_2024": "",
+    "index_coefficient_2025": "",
     "document_prefix": "",
     "document_start_number": "1",
     "commission_chair_position": "",
@@ -1051,7 +1054,7 @@ class FletOblikApp:
             [
                 self._settings_field("commander_position", "Посада"),
                 self._settings_field("commander_rank", "Військове звання"),
-                self._settings_field("commander_name", "ПІБ"),
+                self._settings_field("commander_name", "Ім’я та Прізвище"),
             ],
         )
 
@@ -1062,7 +1065,7 @@ class FletOblikApp:
                 self._settings_field("service_name", "Назва служби", "Наприклад: служба озброєння"),
                 self._settings_field("service_chief_position", "Посада"),
                 self._settings_field("service_chief_rank", "Військове звання"),
-                self._settings_field("service_chief_name", "ПІБ"),
+                self._settings_field("service_chief_name", "Ім’я та Прізвище"),
             ],
         )
 
@@ -1072,7 +1075,17 @@ class FletOblikApp:
             [
                 self._settings_field("finance_chief_position", "Посада"),
                 self._settings_field("finance_chief_rank", "Військове звання"),
-                self._settings_field("finance_chief_name", "ПІБ"),
+                self._settings_field("finance_chief_name", "Ім’я та Прізвище"),
+            ],
+        )
+
+        coefficients_card = self._settings_card(
+            "Коефіцієнти індексації",
+            "Постійні коефіцієнти за роками, як у старому аркуші Setting. Вони лише зберігаються в налаштуваннях і поки автоматично нічого не перераховують.",
+            [
+                self._settings_field("index_coefficient_2023", "Коефіцієнт 2023"),
+                self._settings_field("index_coefficient_2024", "Коефіцієнт 2024"),
+                self._settings_field("index_coefficient_2025", "Коефіцієнт 2025"),
             ],
         )
 
@@ -1087,10 +1100,16 @@ class FletOblikApp:
 
         self.commission_member_entries = []
         commission_members_host = ft.Column(spacing=10)
+        commission_count = ft.Text(
+            "Членів комісії: 0",
+            size=12,
+            color=ft.Colors.BLUE_GREY_600,
+        )
 
         def refresh_member_titles():
             for index, entry in enumerate(self.commission_member_entries, start=1):
                 entry["title"].value = f"Член комісії №{index}"
+            commission_count.value = f"Членів комісії: {len(self.commission_member_entries)}"
 
         def add_commission_member(e=None, member=None):
             member = member if isinstance(member, dict) else {}
@@ -1105,7 +1124,7 @@ class FletOblikApp:
                 expand=1,
             )
             name = ft.TextField(
-                label="ПІБ",
+                label="Ім’я та Прізвище",
                 value=str(member.get("name", "") or ""),
                 expand=2,
             )
@@ -1177,13 +1196,19 @@ class FletOblikApp:
                 ),
                 self._settings_field("commission_chair_position", "Посада голови комісії"),
                 self._settings_field("commission_chair_rank", "Військове звання голови"),
-                self._settings_field("commission_chair_name", "ПІБ голови комісії"),
+                self._settings_field("commission_chair_name", "Ім’я та Прізвище голови комісії"),
                 ft.Divider(),
                 ft.Row(
                     controls=[
-                        ft.Text(
-                            "Члени комісії",
-                            weight=ft.FontWeight.BOLD,
+                        ft.Column(
+                            controls=[
+                                ft.Text(
+                                    "Члени комісії",
+                                    weight=ft.FontWeight.BOLD,
+                                ),
+                                commission_count,
+                            ],
+                            spacing=1,
                         ),
                         ft.Container(expand=True),
                         ft.Button(
@@ -1244,6 +1269,7 @@ class FletOblikApp:
                         commander_card,
                         service_card,
                         finance_card,
+                        coefficients_card,
                         commission_card,
                         numbering_card,
                         ft.Row(
