@@ -1828,10 +1828,460 @@ class FletOblikApp:
         self.selected_excel_row = excel_row if is_selected else None
         self._refresh_table()
 
+    def _selected_record_values(self) -> Optional[dict[str, Any]]:
+        if (
+            self.model.wb is None
+            or self.current_sheet != SHEET_MOVEMENT
+            or self.selected_excel_row is None
+        ):
+            self._show_message("Дія", "Спочатку виберіть запис у таблиці.")
+            return None
+        ws = self.model.wb[SHEET_MOVEMENT]
+        headers = self.model.headers(SHEET_MOVEMENT)
+        return {
+            header: ws.cell(self.selected_excel_row, i + 1).value
+            for i, header in enumerate(headers)
+        }
+
+    @staticmethod
+    def _append_action_note(existing: Any, line: str) -> str:
+        current = display_value(existing).strip()
+        return f"{current}\n{line}".strip() if current else line
+
+    def _create_action_transaction(
+        self,
+        base: dict[str, Any],
+        operation_type: str,
+        updates: dict[str, Any],
+        note_line: str = "",
+    ) -> int:
+        data = dict(base)
+        source_id = display_value(base.get(TRANSACTION_ID_HEADER)).strip()
+        data[TRANSACTION_ID_HEADER] = None
+        data[OPERATION_TYPE_HEADER] = operation_type
+        data.update(updates)
+        if note_line:
+            data["Примітка"] = self._append_action_note(
+                data.get("Примітка"),
+                note_line,
+            )
+        reason = (
+            f"{operation_type}; базова транзакція {source_id}"
+            if source_id
+            else operation_type
+        )
+        new_row = self.model.append_record(SHEET_MOVEMENT, data, reason)
+        try:
+            self.model.rebuild_current_state()
+        except Exception:
+            # Нова транзакція все одно зберігається; поточний стан можна
+            # перебудувати окремою кнопкою.
+            pass
+        self.selected_excel_row = new_row
+        self._refresh_table()
+        self._set_status(
+            f"Створено нову транзакцію: {operation_type}. "
+            "Не забудьте зберегти книгу."
+        )
+        return new_row
+
+    def _open_move_dialog(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        from_brigade = display_value(base.get(MAIN_HEADERS[19]))
+        from_subunit = display_value(base.get(MAIN_HEADERS[20]))
+        to_brigade = ft.TextField(label="Куди — підрозділ бригади")
+        to_subunit = ft.TextField(label="Куди — підрозділ батальйону/дивізіону")
+        doc_no = ft.TextField(label="Номер документа")
+        doc_date = ft.TextField(label="Дата документа", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_move(evt=None):
+            if not (to_brigade.value or "").strip() and not (to_subunit.value or "").strip():
+                self._show_message(
+                    "Переміщення",
+                    "Вкажіть хоча б один підрозділ призначення.",
+                )
+                return
+            updates = {
+                MAIN_HEADERS[19]: parse_user_value(MAIN_HEADERS[19], to_brigade.value or ""),
+                MAIN_HEADERS[20]: parse_user_value(MAIN_HEADERS[20], to_subunit.value or ""),
+                MAIN_HEADERS[21]: parse_user_value(MAIN_HEADERS[21], doc_no.value or ""),
+                MAIN_HEADERS[22]: parse_user_value(MAIN_HEADERS[22], doc_date.value or ""),
+            }
+            destination = " / ".join(
+                value for value in [
+                    (to_brigade.value or "").strip(),
+                    (to_subunit.value or "").strip(),
+                ]
+                if value
+            )
+            extra = (note.value or "").strip()
+            line = f"[Переміщення] → {destination}"
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, "Переміщення", updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Перемістити майно"),
+            content=ft.Container(
+                width=700,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Text(
+                            "Звідки: "
+                            + (" / ".join(x for x in [from_brigade, from_subunit] if x) or "не вказано"),
+                            color=ft.Colors.BLUE_GREY_700,
+                        ),
+                        to_brigade,
+                        to_subunit,
+                        ft.Row(controls=[doc_no, doc_date], spacing=8),
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити переміщення", icon=ft.Icons.SWAP_HORIZ, on_click=save_move),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_writeoff_dialog(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        order_no = ft.TextField(label="Номер наказу на списання")
+        order_date = ft.TextField(label="Дата наказу на списання", hint_text="дд.мм.рррр")
+        act_no = ft.TextField(label="Номер Єдиного акту списання")
+        act_date = ft.TextField(label="Дата Єдиного акту списання", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_writeoff(evt=None):
+            parsed_order_date = parse_user_value(MAIN_HEADERS[30], order_date.value or "")
+            parsed_act_date = parse_user_value(MAIN_HEADERS[32], act_date.value or "")
+            status_date = parsed_act_date or parsed_order_date
+            updates = {
+                MAIN_HEADERS[23]: "Списаний",
+                MAIN_HEADERS[24]: status_date,
+                MAIN_HEADERS[29]: parse_user_value(MAIN_HEADERS[29], order_no.value or ""),
+                MAIN_HEADERS[30]: parsed_order_date,
+                MAIN_HEADERS[31]: parse_user_value(MAIN_HEADERS[31], act_no.value or ""),
+                MAIN_HEADERS[32]: parsed_act_date,
+            }
+            details = []
+            if (order_no.value or "").strip():
+                details.append(f"наказ №{order_no.value.strip()}")
+            if (act_no.value or "").strip():
+                details.append(f"акт №{act_no.value.strip()}")
+            extra = (note.value or "").strip()
+            line = "[Списання]"
+            if details:
+                line += " " + ", ".join(details)
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, "Списання", updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Списати майно"),
+            content=ft.Container(
+                width=720,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Row(controls=[order_no, order_date], spacing=8),
+                        ft.Row(controls=[act_no, act_date], spacing=8),
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити списання", icon=ft.Icons.DELETE_SWEEP, on_click=save_writeoff),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_status_dialog(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        states = [
+            "Справний",
+            "Несправний",
+            "Переданий в ремонт",
+            "Знищений",
+            "Втрачений",
+            "Списаний",
+        ]
+        current = display_value(base.get(MAIN_HEADERS[23]))
+        status = ft.Dropdown(
+            label="Новий стан",
+            value=current if current in states else None,
+            options=[ft.DropdownOption(key=value, text=value) for value in states],
+        )
+        status_date = ft.TextField(label="Дата зміни стану", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_status(evt=None):
+            chosen = status.value or status.text or ""
+            if not chosen:
+                self._show_message("Зміна стану", "Оберіть новий стан.")
+                return
+            updates = {
+                MAIN_HEADERS[23]: chosen,
+                MAIN_HEADERS[24]: parse_user_value(MAIN_HEADERS[24], status_date.value or ""),
+            }
+            extra = (note.value or "").strip()
+            line = f"[Зміна стану] {chosen}"
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, "Зміна стану", updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Змінити стан майна"),
+            content=ft.Container(
+                width=620,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        status,
+                        status_date,
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити транзакцію", icon=ft.Icons.HEALTH_AND_SAFETY, on_click=save_status),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_stock_quantity_dialog(self, operation_type: str, sign: int):
+        base = self._selected_record_values()
+        if not base:
+            return
+        if "запас" not in norm(base.get(MAIN_HEADERS[8])):
+            self._show_message(
+                operation_type,
+                "Ця дія доступна для записів із типом майна «Запас».",
+            )
+            return
+
+        quantity = ft.TextField(label="Кількість")
+        destination = ft.TextField(
+            label="Кому / підрозділ",
+            hint_text="Для повернення можна вказати склад або підрозділ",
+        )
+        doc_no = ft.TextField(label="Номер документа")
+        doc_date = ft.TextField(label="Дата документа", hint_text="дд.мм.рррр")
+        note = ft.TextField(label="Примітка", multiline=True, min_lines=2, max_lines=4)
+
+        def save_stock(evt=None):
+            qty = numeric_value(quantity.value)
+            if qty is None or qty <= 0:
+                self._show_message(operation_type, "Вкажіть кількість більше нуля.")
+                return
+            signed_qty = abs(qty) * sign
+            updates = {
+                MAIN_HEADERS[16]: signed_qty,
+                MAIN_HEADERS[20]: parse_user_value(MAIN_HEADERS[20], destination.value or ""),
+                MAIN_HEADERS[21]: parse_user_value(MAIN_HEADERS[21], doc_no.value or ""),
+                MAIN_HEADERS[22]: parse_user_value(MAIN_HEADERS[22], doc_date.value or ""),
+            }
+            extra = (note.value or "").strip()
+            line = f"[{operation_type}] {abs(qty):g}"
+            if (destination.value or "").strip():
+                line += f" → {destination.value.strip()}"
+            if extra:
+                line += f"; {extra}"
+            self.page.pop_dialog()
+            self._create_action_transaction(base, operation_type, updates, line)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(operation_type),
+            content=ft.Container(
+                width=650,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            "Кількісний залишок запасів ще не агрегується автоматично; "
+                            "ця дія вже створює окрему транзакцію руху.",
+                            color=ft.Colors.ORANGE_800,
+                        ),
+                        quantity,
+                        destination,
+                        ft.Row(controls=[doc_no, doc_date], spacing=8),
+                        note,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Скасувати", on_click=lambda evt: self.page.pop_dialog()),
+                ft.Button(content="Створити транзакцію", icon=ft.Icons.SAVE, on_click=save_stock),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _open_issue_stock_dialog(self, e=None):
+        self._open_stock_quantity_dialog("Видача", -1)
+
+    def _open_return_stock_dialog(self, e=None):
+        self._open_stock_quantity_dialog("Повернення", 1)
+
+    def _show_selected_history(self, e=None):
+        base = self._selected_record_values()
+        if not base:
+            return
+
+        df = self.model.dataframe(SHEET_MOVEMENT)
+        inv = norm(base.get(MAIN_HEADERS[9]))
+        serial = norm(base.get(MAIN_HEADERS[18]))
+        code = norm(base.get(MAIN_HEADERS[7]))
+        name = norm(base.get(MAIN_HEADERS[12]) or base.get(MAIN_HEADERS[11]))
+
+        def same_asset(row) -> bool:
+            if inv:
+                return norm(row.get(MAIN_HEADERS[9])) == inv
+            if serial:
+                return (
+                    norm(row.get(MAIN_HEADERS[18])) == serial
+                    and norm(row.get(MAIN_HEADERS[12]) or row.get(MAIN_HEADERS[11])) == name
+                )
+            return (
+                bool(code or name)
+                and (not code or norm(row.get(MAIN_HEADERS[7])) == code)
+                and (not name or norm(row.get(MAIN_HEADERS[12]) or row.get(MAIN_HEADERS[11])) == name)
+            )
+
+        records = [
+            row for _, row in df.iterrows()
+            if same_asset(row)
+        ]
+
+        def event_date(row) -> str:
+            for header in (
+                MAIN_HEADERS[32],
+                MAIN_HEADERS[30],
+                MAIN_HEADERS[24],
+                MAIN_HEADERS[22],
+                MAIN_HEADERS[4],
+            ):
+                value = row.get(header)
+                if not is_blank(value):
+                    return display_value(value)
+            return ""
+
+        cards = []
+        for row in reversed(records):
+            location = " / ".join(
+                value for value in [
+                    display_value(row.get(MAIN_HEADERS[19])).strip(),
+                    display_value(row.get(MAIN_HEADERS[20])).strip(),
+                ]
+                if value
+            )
+            document = (
+                display_value(row.get(MAIN_HEADERS[31])).strip()
+                or display_value(row.get(MAIN_HEADERS[29])).strip()
+                or display_value(row.get(MAIN_HEADERS[21])).strip()
+                or display_value(row.get(MAIN_HEADERS[3])).strip()
+            )
+            cards.append(
+                ft.Container(
+                    padding=12,
+                    border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+                    border_radius=10,
+                    content=ft.Column(
+                        spacing=4,
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    ft.Text(
+                                        display_value(row.get(TRANSACTION_ID_HEADER)),
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    ft.Text(
+                                        display_value(row.get(OPERATION_TYPE_HEADER)) or "Запис",
+                                        color=ft.Colors.BLUE_700,
+                                    ),
+                                    ft.Container(expand=True),
+                                    ft.Text(event_date(row), color=ft.Colors.BLUE_GREY_600),
+                                ]
+                            ),
+                            ft.Text(
+                                f"Документ: {document or '—'} | "
+                                f"Кількість: {display_value(row.get(MAIN_HEADERS[16])) or '—'}"
+                            ),
+                            ft.Text(
+                                f"Місце: {location or '—'} | "
+                                f"Стан: {display_value(row.get(MAIN_HEADERS[23])) or '—'}"
+                            ),
+                            ft.Text(
+                                display_value(row.get("Примітка")),
+                                color=ft.Colors.BLUE_GREY_700,
+                            ) if display_value(row.get("Примітка")).strip() else ft.Container(),
+                        ],
+                    ),
+                )
+            )
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Історія: "
+                + (
+                    display_value(base.get(MAIN_HEADERS[9]))
+                    or display_value(base.get(MAIN_HEADERS[18]))
+                    or display_value(base.get(MAIN_HEADERS[12]))
+                    or "майно"
+                )
+            ),
+            content=ft.Container(
+                width=900,
+                height=560,
+                content=ft.Column(
+                    controls=cards or [ft.Text("Історію не знайдено.")],
+                    scroll=ft.ScrollMode.AUTO,
+                    spacing=8,
+                ),
+            ),
+            actions=[
+                ft.TextButton("Закрити", on_click=lambda evt: self.page.pop_dialog()),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
     def _display_headers_for_form(self, headers: list[str]) -> list[str]:
         result = [
             h for h in headers
-            if h not in ("№ з/п", TRANSACTION_ID_HEADER)
+            if h not in ("№ з/п", TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER)
         ]
         if "Ціна" in result and "Кількість" in result:
             result.remove("Кількість")
