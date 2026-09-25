@@ -922,7 +922,8 @@ class FletOblikApp:
             on_change=self._search_changed,
             expand=True,
         )
-        self.table_host = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
+        # Таблиця сама керує вертикальною/горизонтальною прокруткою через DataTable2.
+        self.table_host = ft.Column(expand=True)
 
         self.btn_add = ft.Button(
             content="+ Додати запис",
@@ -941,6 +942,69 @@ class FletOblikApp:
             icon=ft.Icons.DELETE_OUTLINE,
             on_click=self._delete_record,
             disabled=True,
+        )
+
+        self.action_menu = ft.PopupMenuButton(
+            disabled=True,
+            menu_position=ft.PopupMenuPosition.UNDER,
+            content=ft.Container(
+                padding=ft.Padding.symmetric(horizontal=14, vertical=9),
+                border=ft.Border.all(1, ft.Colors.BLUE_200),
+                border_radius=22,
+                bgcolor=ft.Colors.BLUE_50,
+                content=ft.Row(
+                    tight=True,
+                    spacing=6,
+                    controls=[
+                        ft.Icon(ft.Icons.BOLT, size=18, color=ft.Colors.BLUE_700),
+                        ft.Text("Дія", weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_800),
+                        ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=20, color=ft.Colors.BLUE_700),
+                    ],
+                ),
+            ),
+            items=[
+                ft.PopupMenuItem(
+                    icon=ft.Icons.SWAP_HORIZ,
+                    content="Перемістити",
+                    on_click=self._open_move_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.INVENTORY_2,
+                    content="Видати запас",
+                    on_click=self._open_issue_stock_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.ASSIGNMENT_RETURN,
+                    content="Повернути запас",
+                    on_click=self._open_return_stock_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.DELETE_SWEEP,
+                    content="Списати",
+                    on_click=self._open_writeoff_dialog,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HEALTH_AND_SAFETY,
+                    content="Змінити стан",
+                    on_click=self._open_status_dialog,
+                ),
+                ft.PopupMenuItem(),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HISTORY,
+                    content="Переглянути історію",
+                    on_click=self._show_selected_history,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.EDIT,
+                    content="Редагувати запис",
+                    on_click=self._edit_record,
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    content="Видалити запис",
+                    on_click=self._delete_record,
+                ),
+            ],
         )
 
         self.sheet_buttons: dict[str, ft.Button] = {}
@@ -1034,8 +1098,7 @@ class FletOblikApp:
             controls=[
                 self.search,
                 self.btn_add,
-                self.btn_edit,
-                self.btn_delete,
+                self.action_menu,
             ],
             spacing=8,
         )
