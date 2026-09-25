@@ -1022,7 +1022,7 @@ class FletOblikApp:
                     content="Змінити стан",
                     on_click=self._open_status_dialog,
                 ),
-                ft.PopupMenuItem(),
+                ft.PopupMenuItem(content=ft.Divider(height=1), height=12),
                 ft.PopupMenuItem(
                     icon=ft.Icons.HISTORY,
                     content="Переглянути історію",
@@ -1620,9 +1620,15 @@ class FletOblikApp:
 
         self.table_host.controls.extend([
             ft.Container(
-                width=900,
+                expand=True,
                 content=ft.Column(
+                    expand=True,
+                    scroll=ft.ScrollMode.AUTO,
                     controls=[
+                        ft.Container(
+                            width=900,
+                            content=ft.Column(
+                                controls=[
                         ft.Text(
                             "Ці реквізити зберігаються локально на цьому комп'ютері та не записуються в Excel автоматично.",
                             color=ft.Colors.BLUE_GREY_700,
@@ -1635,18 +1641,21 @@ class FletOblikApp:
                         commission_card,
                         inventory_generator_card,
                         numbering_card,
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.END,
-                            controls=[
-                                ft.Button(
-                                    content="Зберегти налаштування",
-                                    icon=ft.Icons.SAVE,
-                                    on_click=save_settings,
-                                ),
-                            ],
-                        ),
+                                    ft.Row(
+                                        alignment=ft.MainAxisAlignment.END,
+                                        controls=[
+                                            ft.Button(
+                                                content="Зберегти налаштування",
+                                                icon=ft.Icons.SAVE,
+                                                on_click=save_settings,
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                                spacing=14,
+                            ),
+                        )
                     ],
-                    spacing=14,
                 ),
             )
         ])
@@ -1698,6 +1707,10 @@ class FletOblikApp:
         if TRANSACTION_ID_HEADER in visible_headers:
             visible_headers.remove(TRANSACTION_ID_HEADER)
             visible_headers.insert(0, TRANSACTION_ID_HEADER)
+        if OPERATION_TYPE_HEADER in visible_headers:
+            visible_headers.remove(OPERATION_TYPE_HEADER)
+            insert_at = 1 if TRANSACTION_ID_HEADER in visible_headers else 0
+            visible_headers.insert(insert_at, OPERATION_TYPE_HEADER)
         query = norm(self.search.value)
 
         duplicate_map = (
@@ -2542,6 +2555,7 @@ class FletOblikApp:
                     "Переданий в ремонт",
                     "Знищений",
                     "Втрачений",
+                    "Списаний",
                 ]
                 control = ft.Dropdown(
                     editable=True,
