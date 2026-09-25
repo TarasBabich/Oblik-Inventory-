@@ -154,6 +154,11 @@ def main():
         assert tx2 == "TX-002"
         assert ws_move.cell(row2, op_col).value == "Переміщення"
 
+        # Службові транзакції руху не є дублями первинного оприбуткування.
+        dup_map = model.duplicate_map()
+        assert dup_map.get(row1) is None or dup_map[row1].score < 5
+        assert row2 not in dup_map
+
         count, skipped = model.rebuild_current_state()
         assert count == 1
         current = model.dataframe(SHEET_CURRENT)
