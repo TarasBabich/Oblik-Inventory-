@@ -376,6 +376,8 @@ class OblikWorkbook:
             migrated = True
         if self._ensure_transaction_ids():
             migrated = True
+        if self._ensure_operation_types():
+            migrated = True
 
         self.path = path
         self.dirty = migrated
@@ -484,6 +486,22 @@ class OblikWorkbook:
                 self._replace_transaction_id_in_sheet(SHEET_CHANGES, old_id, new_id)
                 self._replace_transaction_id_in_sheet(SHEET_CURRENT, old_id, new_id)
 
+        return changed
+
+    def _ensure_operation_types(self) -> bool:
+        ws = self.wb[SHEET_MOVEMENT]
+        headers = self.headers(SHEET_MOVEMENT)
+        if OPERATION_TYPE_HEADER not in headers:
+            return False
+        op_col = headers.index(OPERATION_TYPE_HEADER) + 1
+        tx_col = headers.index(TRANSACTION_ID_HEADER) + 1
+        changed = False
+        for row in range(2, ws.max_row + 1):
+            if not self._row_has_data(ws, row, 2, tx_col):
+                continue
+            if not norm(ws.cell(row, op_col).value):
+                ws.cell(row, op_col, "Імпортований запис")
+                changed = True
         return changed
 
     def _transaction_id_exists(self, transaction_id: Any, ignore_excel_row: Optional[int] = None) -> bool:
@@ -745,8 +763,13 @@ class OblikWorkbook:
         name_col = MAIN_HEADERS[12]
         inv_col = MAIN_HEADERS[9]
         serial_col = MAIN_HEADERS[18]
-        movement_date_col = MAIN_HEADERS[22]
-        receive_date_col = MAIN_HEADERS[4]
+        event_date_cols = [
+            MAIN_HEADERS[22],  # документ поточного розміщення
+            MAIN_HEADERS[24],  # дата зміни стану
+            MAIN_HEADERS[30],  # дата наказу на списання
+            MAIN_HEADERS[32],  # дата єдиного акту списання
+            MAIN_HEADERS[4],   # дата первинного отримання
+        ]
 
         def key_for(row) -> str:
             inv = norm(row.get(inv_col))
@@ -767,10 +790,21 @@ class OblikWorkbook:
                 return pd.NaT
             return pd.to_datetime(value, dayfirst=True, errors="coerce")
 
-        identified["_sort_date"] = identified[movement_date_col].map(as_ts)
-        identified["_receive_date"] = identified[receive_date_col].map(as_ts)
-        identified["_sort_date"] = identified["_sort_date"].fillna(identified["_receive_date"])
-        identified["_sort_date"] = identified["_sort_date"].fillna(pd.Timestamp("1900-01-01"))
+        event_dates = pd.DataFrame(
+            {
+                header: identified[header].map(as_ts)
+                for header in event_date_cols
+                if header in identified.columns
+            },
+            index=identified.index,
+        )
+        if event_dates.empty:
+            identified["_sort_date"] = pd.Timestamp("1900-01-01")
+        else:
+            identified["_sort_date"] = event_dates.max(axis=1)
+            identified["_sort_date"] = identified["_sort_date"].fillna(
+                pd.Timestamp("1900-01-01")
+            )
         identified = identified.sort_values(["_asset_key", "_sort_date", "_excel_row"])
         latest = identified.groupby("_asset_key", as_index=False).tail(1)
 
