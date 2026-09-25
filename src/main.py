@@ -1747,30 +1747,31 @@ class FletOblikApp:
             for header in visible_headers
         ]
 
-        table = ft.DataTable(
+        table = fdt.DataTable2(
             columns=columns,
             rows=data_rows,
+            expand=True,
             show_checkbox_column=False,
             heading_row_color=ft.Colors.BLUE_50,
-            data_row_min_height=44,
-            data_row_max_height=72,
+            fixed_top_rows=1,
+            fixed_left_columns=1 if TRANSACTION_ID_HEADER in visible_headers else 0,
+            fixed_columns_color=ft.Colors.BLUE_GREY_50,
+            fixed_corner_color=ft.Colors.BLUE_100,
+            visible_horizontal_scroll_bar=True,
+            visible_vertical_scroll_bar=True,
+            min_width=max(1100, len(visible_headers) * 181),
+            heading_row_height=58,
+            data_row_height=64,
             column_spacing=8,
             horizontal_margin=8,
         )
 
-        # Постійний горизонтальний повзунок під широкою таблицею.
-        # ScrollbarOrientation.BOTTOM гарантує, що він завжди знаходиться знизу.
+        # DataTable2 тримає шапку зверху та ID транзакції зліва.
+        # Прокручується лише тіло таблиці, а обидва scrollbars завжди доступні.
         self.table_host.controls.append(
-            ft.Row(
-                controls=[table],
-                scroll=ft.Scrollbar(
-                    orientation=ft.ScrollbarOrientation.BOTTOM,
-                    thumb_visibility=True,
-                    track_visibility=True,
-                    interactive=True,
-                    thickness=12,
-                    radius=8,
-                ),
+            ft.Container(
+                expand=True,
+                content=table,
             )
         )
 
