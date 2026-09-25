@@ -34,9 +34,10 @@ from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 import flet as ft
+import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.6"
+APP_VERSION = "0.2.7"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -46,6 +47,7 @@ SHEET_CHANGES = "Контроль змін"
 REQUIRED_SHEETS = [SHEET_STAFF, SHEET_MOVEMENT, SHEET_CURRENT, SHEET_SUMMARY, SHEET_CHANGES]
 SETTINGS_VIEW = "Налаштування"
 TRANSACTION_ID_HEADER = "ID транзакції"
+OPERATION_TYPE_HEADER = "Тип операції"
 
 DEFAULT_APP_SETTINGS = {
     "unit_number": "",
@@ -111,6 +113,7 @@ MAIN_HEADERS = [
     "Дата єдиного акту списання",
     "Примітка",
     TRANSACTION_ID_HEADER,
+    OPERATION_TYPE_HEADER,
 ]
 
 CHANGE_HEADERS = [
@@ -378,17 +381,22 @@ class OblikWorkbook:
         self.dirty = migrated
 
     def _ensure_main_sheet_schema(self, ws) -> bool:
-        """Додає нові технічні колонки без зсуву наявної Excel-структури."""
+        """Додає нові технічні колонки в кінець, не зсуваючи стару Excel-структуру."""
         headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
-        if TRANSACTION_ID_HEADER in headers:
-            return False
-        col = ws.max_column + 1
-        ws.cell(1, col, TRANSACTION_ID_HEADER)
-        if col > 1 and ws.cell(1, col - 1).has_style:
-            ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
-        ws.column_dimensions[get_column_letter(col)].width = 18
-        ws.auto_filter.ref = f"A1:{get_column_letter(col)}1"
-        return True
+        changed = False
+        for technical_header in (TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER):
+            if technical_header in headers:
+                continue
+            col = ws.max_column + 1
+            ws.cell(1, col, technical_header)
+            if col > 1 and ws.cell(1, col - 1).has_style:
+                ws.cell(1, col)._style = copy(ws.cell(1, col - 1)._style)
+            ws.column_dimensions[get_column_letter(col)].width = 18
+            headers.append(technical_header)
+            changed = True
+        if changed:
+            ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}1"
+        return changed
 
     def _ensure_change_sheet_schema(self, ws) -> bool:
         headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
@@ -550,6 +558,8 @@ class OblikWorkbook:
                 sequence += 1
                 transaction_id = format_transaction_id(sequence)
             values[TRANSACTION_ID_HEADER] = transaction_id
+            if not norm(values.get(OPERATION_TYPE_HEADER)):
+                values[OPERATION_TYPE_HEADER] = "Первинний запис"
         start_row = 2
         row = self._first_empty_data_row(ws, start_row)
         template_row = start_row
@@ -581,7 +591,7 @@ class OblikWorkbook:
         changes = []
 
         for i, header in enumerate(headers, 1):
-            if header in ("№ з/п", "Сума", TRANSACTION_ID_HEADER):
+            if header in ("№ з/п", "Сума", TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER):
                 continue
             old = old_values.get(header)
             new = new_values.get(header)
