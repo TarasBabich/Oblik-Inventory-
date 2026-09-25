@@ -1307,6 +1307,7 @@ class FletOblikApp:
         self.btn_add.visible = False
         self.btn_edit.visible = False
         self.btn_delete.visible = False
+        self.action_menu.visible = False
         self.sheet_title.value = SETTINGS_VIEW
         self.file_label.value = f"Файл налаштувань: {self.settings_store.path.name}"
         self.settings_fields = {}
@@ -1624,6 +1625,8 @@ class FletOblikApp:
         selected = editable and self.selected_excel_row is not None
         self.btn_edit.disabled = not selected
         self.btn_delete.disabled = not selected
+        self.action_menu.disabled = not selected
+        self.action_menu.opacity = 1.0 if selected else 0.45
 
     def _refresh_table(self):
         if self.current_sheet == SETTINGS_VIEW:
@@ -1631,9 +1634,10 @@ class FletOblikApp:
             return
 
         self.search.visible = True
-        self.btn_add.visible = True
-        self.btn_edit.visible = True
-        self.btn_delete.visible = True
+        self.btn_add.visible = self.current_sheet == SHEET_MOVEMENT
+        self.btn_edit.visible = False
+        self.btn_delete.visible = False
+        self.action_menu.visible = self.current_sheet == SHEET_MOVEMENT
         self.table_host.controls.clear()
         self.sheet_title.value = self.current_sheet
         self.file_label.value = (
