@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore)
 import pandas as pd
+import flet as ft
 
 
 def record(inv, serial, order, order_date, act, act_date, location, qty=1):
@@ -26,6 +27,9 @@ def record(inv, serial, order, order_date, act, act_date, location, qty=1):
 
 
 def main():
+    # Flet 1.x removed deprecated aliases like WHITE24/WHITE70.
+    assert ft.Colors.WHITE_24
+    assert ft.Colors.WHITE_70
     assert calculate_total(1250.50, 4) == 5002.0
     unit_price = calculate_unit_price(100, 3)
     assert unit_price is not None
