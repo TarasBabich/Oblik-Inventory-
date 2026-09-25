@@ -36,7 +36,7 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.3"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -750,7 +750,7 @@ class FletOblikApp:
                         weight=ft.FontWeight.BOLD,
                         color=ft.Colors.WHITE,
                     ),
-                    ft.VerticalDivider(color=ft.Colors.WHITE24),
+                    ft.VerticalDivider(color=ft.Colors.WHITE_24),
                     ft.Button(
                         content="Відкрити Excel",
                         icon=ft.Icons.FOLDER_OPEN,
@@ -777,7 +777,7 @@ class FletOblikApp:
                         on_click=self._rebuild_current,
                     ),
                     ft.Container(expand=True),
-                    ft.Text(f"v{APP_VERSION}", color=ft.Colors.WHITE70),
+                    ft.Text(f"v{APP_VERSION}", color=ft.Colors.WHITE_70),
                 ],
             ),
         )
