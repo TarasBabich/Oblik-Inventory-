@@ -685,6 +685,9 @@ class OblikWorkbook:
 
         records = []
         for _, row in df.iterrows():
+            operation_type = norm(row.get(OPERATION_TYPE_HEADER))
+            if operation_type and operation_type not in ("первинний запис", "імпортований запис"):
+                continue
             identifier = norm(row.get(DUPLICATE_FIELDS["inventory_no"])) or norm(row.get(DUPLICATE_FIELDS["serial_no"]))
             sig = [
                 norm(row.get(DUPLICATE_FIELDS["order_no"])),
@@ -736,6 +739,9 @@ class OblikWorkbook:
         for _, row in df.iterrows():
             rnum = int(row["_excel_row"])
             if ignore_excel_row and rnum == ignore_excel_row:
+                continue
+            operation_type = norm(row.get(OPERATION_TYPE_HEADER))
+            if operation_type and operation_type not in ("первинний запис", "імпортований запис"):
                 continue
             sig = [
                 norm(row.get(DUPLICATE_FIELDS["order_no"])),
