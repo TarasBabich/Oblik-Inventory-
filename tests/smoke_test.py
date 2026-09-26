@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY)
 import pandas as pd
 import flet as ft
 import flet_datatable2 as fdt
@@ -69,6 +69,16 @@ def main():
     assert sticky_table.fixed_left_columns == 1
     assert sticky_table.visible_horizontal_scroll_bar is True
 
+    summary_dropdown = ft.Dropdown(
+        value="Узагальнена назва",
+        options=[
+            ft.DropdownOption(key=label, text=label)
+            for label in SUMMARY_GROUP_FIELDS
+        ],
+        on_select=lambda e: None,
+    )
+    assert summary_dropdown.value == "Узагальнена назва"
+
     assert format_inventory_number("ОВТ-", 25, 6) == "ОВТ-000025"
     assert format_inventory_number("100-", 7, 4, "/26") == "100-0007/26"
     inv_settings = {
@@ -130,6 +140,11 @@ def main():
 
         r1 = record("INV-001", "SN-001", "Н-1", "01.01.2024", "А-1", "02.01.2024", "РРЕБ")
         r2 = record("INV-001", "SN-001", "Н-2", "01.02.2024", "А-2", "02.02.2024", "1 МБ")
+        for item in (r1, r2):
+            item[MAIN_HEADERS[10]] = "Номенклатура А"
+            item[MAIN_HEADERS[11]] = "Засоби РЕБ"
+            item[MAIN_HEADERS[13]] = "SAP-001"
+            item[MAIN_HEADERS[23]] = "Справний"
         row1 = model.append_record(SHEET_MOVEMENT, r1, "test")
         ws_move = model.wb[SHEET_MOVEMENT]
         assert row1 == 2
@@ -205,6 +220,34 @@ def main():
         reloaded.delete_record(SHEET_MOVEMENT, row2, "test delete")
         row3 = reloaded.append_record(SHEET_MOVEMENT, r2, "after delete")
         assert reloaded.wb[SHEET_MOVEMENT].cell(row3, tx_col).value == "TX-004"
+
+        # Перевіряємо три незалежні режими групування Зведеного.
+        r3 = record("INV-002", "SN-002", "Н-3", "01.03.2024", "А-3", "02.03.2024", "Склад", qty=2)
+        r3[MAIN_HEADERS[10]] = "Номенклатура Б"
+        r3[MAIN_HEADERS[11]] = "Засоби РЕБ"
+        r3[MAIN_HEADERS[13]] = "SAP-001"
+        r3[MAIN_HEADERS[23]] = "Несправний"
+        reloaded.append_record(SHEET_MOVEMENT, r3, "summary test")
+        count, skipped = reloaded.rebuild_current_state()
+        assert count == 2
+
+        by_general = reloaded.build_summary_dataframe(MAIN_HEADERS[11])
+        assert len(by_general) == 1
+        assert by_general.iloc[0]["Значення"] == "Засоби РЕБ"
+        assert by_general.iloc[0]["Кількість позицій"] == 2
+        assert by_general.iloc[0]["Загальна кількість"] == 3
+
+        by_nomenclature = reloaded.build_summary_dataframe(MAIN_HEADERS[10])
+        assert len(by_nomenclature) == 2
+        assert set(by_nomenclature["Значення"]) == {"Номенклатура А", "Номенклатура Б"}
+
+        by_sap = reloaded.rebuild_summary(MAIN_HEADERS[13])
+        assert len(by_sap) == 1
+        assert by_sap.iloc[0]["Значення"] == "SAP-001"
+        ws_summary = reloaded.wb[SHEET_SUMMARY]
+        assert [ws_summary.cell(1, i).value for i in range(1, len(SUMMARY_OUTPUT_HEADERS) + 1)] == SUMMARY_OUTPUT_HEADERS
+        assert ws_summary["C2"].value == "SAP-001"
+        assert ws_summary["E2"].value == 3
 
         reloaded.save()
         assert path.exists() and path.stat().st_size > 0

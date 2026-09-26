@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.7"
+APP_VERSION = "0.2.8"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -115,6 +115,28 @@ MAIN_HEADERS = [
     TRANSACTION_ID_HEADER,
     OPERATION_TYPE_HEADER,
 ]
+
+SUMMARY_GROUP_FIELDS = {
+    "Узагальнена назва": MAIN_HEADERS[11],
+    "Узагальнена назва номенклатури": MAIN_HEADERS[10],
+    "Номер матеріалу в SAP": MAIN_HEADERS[13],
+}
+
+SUMMARY_OUTPUT_HEADERS = [
+    "№ з/п",
+    "Групування",
+    "Значення",
+    "Кількість позицій",
+    "Загальна кількість",
+    "Загальна сума",
+    "Справні",
+    "Несправні",
+    "В ремонті",
+    "Знищені",
+    "Втрачені",
+    "Списані",
+]
+
 
 CHANGE_HEADERS = [
     "№ з/п", "Дата і час", "Тип активу", "Таблиця", "Інв. №",
@@ -308,10 +330,10 @@ class OblikWorkbook:
         ws_staff.freeze_panes = "A2"
 
         ws_summary = wb.create_sheet(SHEET_SUMMARY)
-        summary_headers = ["№ з/п", "Найменування ОВТ", "За штатом", "За списком", "Наявні", "Несправні", "Потреба", "БПВ", "Забезпеченість", "Примітка", "Дані"]
-        for col, header in enumerate(summary_headers, 1):
+        for col, header in enumerate(SUMMARY_OUTPUT_HEADERS, 1):
             ws_summary.cell(1, col, header)
-        self._style_header(ws_summary, 1, len(summary_headers))
+        self._style_header(ws_summary, 1, len(SUMMARY_OUTPUT_HEADERS))
+        ws_summary.freeze_panes = "A2"
 
         ws_changes = wb.create_sheet(SHEET_CHANGES)
         for col, header in enumerate(CHANGE_HEADERS, 1):
@@ -758,6 +780,123 @@ class OblikWorkbook:
                 rows.append(rnum)
         return DuplicateInfo(best, tuple(rows))
 
+    def build_summary_dataframe(self, group_header: str) -> pd.DataFrame:
+        """Агрегує актуальний Поточний стан за вибраним полем."""
+        if group_header not in SUMMARY_GROUP_FIELDS.values():
+            raise ValueError(f"Непідтримуване поле групування: {group_header}")
+
+        current = self.dataframe(SHEET_CURRENT)
+        if current.empty:
+            return pd.DataFrame(columns=SUMMARY_OUTPUT_HEADERS)
+
+        groups: dict[str, dict[str, Any]] = {}
+        for _, row in current.iterrows():
+            raw_group = display_value(row.get(group_header)).strip()
+            group_value = raw_group or "Не вказано"
+
+            quantity = numeric_value(row.get(MAIN_HEADERS[16]))
+            if quantity is None:
+                # Для поштучного майна без явно заданої кількості один
+                # поточний рядок означає одну одиницю.
+                quantity = 1.0 if (
+                    norm(row.get(MAIN_HEADERS[9]))
+                    or norm(row.get(MAIN_HEADERS[18]))
+                ) else 0.0
+
+            price = numeric_value(row.get(MAIN_HEADERS[15]))
+            total = (price * quantity) if price is not None else 0.0
+            status = norm(row.get(MAIN_HEADERS[23]))
+
+            bucket = groups.setdefault(
+                group_value,
+                {
+                    "Кількість позицій": 0,
+                    "Загальна кількість": 0.0,
+                    "Загальна сума": 0.0,
+                    "Справні": 0.0,
+                    "Несправні": 0.0,
+                    "В ремонті": 0.0,
+                    "Знищені": 0.0,
+                    "Втрачені": 0.0,
+                    "Списані": 0.0,
+                },
+            )
+            bucket["Кількість позицій"] += 1
+            bucket["Загальна кількість"] += quantity
+            bucket["Загальна сума"] += total
+
+            if "передан" in status and "ремонт" in status:
+                bucket["В ремонті"] += quantity
+            elif "несправ" in status:
+                bucket["Несправні"] += quantity
+            elif "знищ" in status:
+                bucket["Знищені"] += quantity
+            elif "втрач" in status:
+                bucket["Втрачені"] += quantity
+            elif "спис" in status:
+                bucket["Списані"] += quantity
+            elif "справ" in status:
+                bucket["Справні"] += quantity
+
+        rows = []
+        group_label = next(
+            label for label, header in SUMMARY_GROUP_FIELDS.items()
+            if header == group_header
+        )
+        for index, group_value in enumerate(
+            sorted(groups, key=lambda value: value.casefold()),
+            start=1,
+        ):
+            bucket = groups[group_value]
+            rows.append({
+                "№ з/п": index,
+                "Групування": group_label,
+                "Значення": group_value,
+                **bucket,
+            })
+
+        return pd.DataFrame(rows, columns=SUMMARY_OUTPUT_HEADERS)
+
+    def rebuild_summary(self, group_header: str) -> pd.DataFrame:
+        """Перебудовує аркуш Зведений відповідно до вибраного режиму."""
+        summary = self.build_summary_dataframe(group_header)
+        ws = self.wb[SHEET_SUMMARY]
+
+        # Зведений є похідним аркушем, тому його вміст можна безпечно
+        # перебудовувати з Поточного стану.
+        if ws.max_row > 0:
+            ws.delete_rows(1, ws.max_row)
+
+        for col, header in enumerate(SUMMARY_OUTPUT_HEADERS, 1):
+            ws.cell(1, col, header)
+        self._style_header(ws, 1, len(SUMMARY_OUTPUT_HEADERS))
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(SUMMARY_OUTPUT_HEADERS))}1"
+
+        for row_index, record in enumerate(summary.to_dict("records"), start=2):
+            for col_index, header in enumerate(SUMMARY_OUTPUT_HEADERS, start=1):
+                ws.cell(row_index, col_index, record.get(header))
+
+        widths = {
+            "A": 8,
+            "B": 32,
+            "C": 42,
+            "D": 18,
+            "E": 18,
+            "F": 20,
+            "G": 14,
+            "H": 14,
+            "I": 14,
+            "J": 14,
+            "K": 14,
+            "L": 14,
+        }
+        for column, width in widths.items():
+            ws.column_dimensions[column].width = width
+
+        self.dirty = True
+        return summary
+
     def rebuild_current_state(self) -> tuple[int, int]:
         """Поточний стан по поштучному майну. Штатну потребу не перераховує."""
         df = self.dataframe(SHEET_MOVEMENT)
@@ -939,6 +1078,7 @@ class FletOblikApp:
         self.settings = self.settings_store.load()
         self.settings_fields: dict[str, ft.TextField] = {}
         self.commission_member_entries: list[dict[str, Any]] = []
+        self.summary_group_mode = "Узагальнена назва"
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -982,6 +1122,24 @@ class FletOblikApp:
             icon=ft.Icons.DELETE_OUTLINE,
             on_click=self._delete_record,
             disabled=True,
+        )
+
+        self.summary_group_dropdown = ft.Dropdown(
+            label="Групувати за",
+            value=self.summary_group_mode,
+            width=320,
+            visible=False,
+            options=[
+                ft.DropdownOption(key=label, text=label)
+                for label in SUMMARY_GROUP_FIELDS
+            ],
+            on_select=self._summary_group_changed,
+        )
+        self.btn_summary_refresh = ft.Button(
+            content="Оновити зведений",
+            icon=ft.Icons.REFRESH,
+            visible=False,
+            on_click=self._refresh_summary,
         )
 
         self.action_menu = ft.PopupMenuButton(
@@ -1137,6 +1295,8 @@ class FletOblikApp:
         action_bar = ft.Row(
             controls=[
                 self.search,
+                self.summary_group_dropdown,
+                self.btn_summary_refresh,
                 self.btn_add,
                 self.action_menu,
             ],
@@ -1348,6 +1508,8 @@ class FletOblikApp:
         self.btn_edit.visible = False
         self.btn_delete.visible = False
         self.action_menu.visible = False
+        self.summary_group_dropdown.visible = False
+        self.btn_summary_refresh.visible = False
         self.sheet_title.value = SETTINGS_VIEW
         self.file_label.value = f"Файл налаштувань: {self.settings_store.path.name}"
         self.settings_fields = {}
@@ -1677,9 +1839,172 @@ class FletOblikApp:
         self.action_menu.disabled = not selected
         self.action_menu.opacity = 1.0 if selected else 0.45
 
+    def _summary_group_changed(self, e=None):
+        selected = (
+            (e.control.value if e is not None and e.control is not None else None)
+            or self.summary_group_dropdown.value
+            or self.summary_group_mode
+        )
+        if selected in SUMMARY_GROUP_FIELDS:
+            self.summary_group_mode = selected
+            self.summary_group_dropdown.value = selected
+        self._render_summary(sync_sheet=True)
+
+    def _refresh_summary(self, e=None):
+        if self.model.wb is None:
+            self._show_message("Зведений", "Спочатку відкрийте або створіть книгу.")
+            return
+        try:
+            self.model.rebuild_current_state()
+            self._render_summary(sync_sheet=True)
+            self._set_status(
+                f"Зведений оновлено: групування «{self.summary_group_mode}»."
+            )
+        except Exception as exc:
+            self._show_message("Помилка зведення", str(exc))
+
+    def _render_summary(self, sync_sheet: bool = True):
+        self.table_host.controls.clear()
+        self.sheet_title.value = SHEET_SUMMARY
+        self.file_label.value = (
+            str(self.model.path) if self.model.path else "Файл не відкрито"
+        )
+
+        self.search.visible = True
+        self.btn_add.visible = False
+        self.btn_edit.visible = False
+        self.btn_delete.visible = False
+        self.action_menu.visible = False
+        self.summary_group_dropdown.visible = True
+        self.btn_summary_refresh.visible = True
+        self.summary_group_dropdown.value = self.summary_group_mode
+
+        if self.model.wb is None:
+            self.table_host.controls.append(
+                ft.Container(
+                    padding=30,
+                    content=ft.Text(
+                        "Відкрийте Excel-файл або створіть нову книгу.",
+                        color=ft.Colors.BLUE_GREY_600,
+                    ),
+                )
+            )
+            self.page.update()
+            return
+
+        group_header = SUMMARY_GROUP_FIELDS[self.summary_group_mode]
+        summary = (
+            self.model.rebuild_summary(group_header)
+            if sync_sheet
+            else self.model.build_summary_dataframe(group_header)
+        )
+
+        query = norm(self.search.value)
+        if query and not summary.empty:
+            mask = summary.apply(
+                lambda row: any(
+                    query in norm(display_value(value))
+                    for value in row.values
+                ),
+                axis=1,
+            )
+            summary = summary[mask]
+
+        visible_headers = [h for h in SUMMARY_OUTPUT_HEADERS if h != "№ з/п"]
+        columns = [
+            ft.DataColumn(
+                label=ft.Container(
+                    width=190 if header != "Значення" else 320,
+                    padding=4,
+                    content=ft.Text(
+                        header,
+                        size=12,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                )
+            )
+            for header in visible_headers
+        ]
+
+        rows = []
+        for _, record in summary.iterrows():
+            cells = []
+            for header in visible_headers:
+                value = record.get(header)
+                if header == "Загальна сума":
+                    cell_text = format_decimal(numeric_value(value), 2)
+                elif header in (
+                    "Загальна кількість",
+                    "Справні",
+                    "Несправні",
+                    "В ремонті",
+                    "Знищені",
+                    "Втрачені",
+                    "Списані",
+                ):
+                    number = numeric_value(value)
+                    if number is None:
+                        cell_text = ""
+                    elif float(number).is_integer():
+                        cell_text = str(int(number))
+                    else:
+                        cell_text = format_decimal(number, 2)
+                else:
+                    cell_text = display_value(value)
+                cells.append(
+                    ft.DataCell(
+                        ft.Container(
+                            width=190 if header != "Значення" else 320,
+                            padding=4,
+                            content=ft.Text(cell_text, size=12, max_lines=3),
+                        )
+                    )
+                )
+            rows.append(ft.DataRow(cells=cells))
+
+        table = fdt.DataTable2(
+            columns=columns,
+            rows=rows,
+            expand=True,
+            heading_row_color=ft.Colors.BLUE_50,
+            fixed_top_rows=1,
+            fixed_left_columns=1,
+            fixed_columns_color=ft.Colors.BLUE_GREY_50,
+            fixed_corner_color=ft.Colors.BLUE_100,
+            visible_horizontal_scroll_bar=True,
+            visible_vertical_scroll_bar=True,
+            min_width=max(1250, len(visible_headers) * 205),
+            heading_row_height=58,
+            data_row_height=58,
+            column_spacing=8,
+            horizontal_margin=8,
+        )
+
+        self.table_host.controls.extend([
+            ft.Container(
+                padding=ft.Padding.only(bottom=8),
+                content=ft.Text(
+                    "Джерело: «Поточний стан». Зміна режиму не змінює дані — "
+                    "лише спосіб їх групування.",
+                    size=12,
+                    color=ft.Colors.BLUE_GREY_600,
+                ),
+            ),
+            ft.Container(expand=True, content=table),
+        ])
+
+        self.status.value = (
+            f"Зведений: {len(summary)} груп | "
+            f"режим «{self.summary_group_mode}» | {self.model.path or ''}"
+        )
+        self.page.update()
+
     def _refresh_table(self):
         if self.current_sheet == SETTINGS_VIEW:
             self._render_settings()
+            return
+        if self.current_sheet == SHEET_SUMMARY:
+            self._render_summary(sync_sheet=True)
             return
 
         self.search.visible = True
@@ -1687,6 +2012,8 @@ class FletOblikApp:
         self.btn_edit.visible = False
         self.btn_delete.visible = False
         self.action_menu.visible = self.current_sheet == SHEET_MOVEMENT
+        self.summary_group_dropdown.visible = False
+        self.btn_summary_refresh.visible = False
         self.table_host.controls.clear()
         self.sheet_title.value = self.current_sheet
         self.file_label.value = (
