@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.7"
+APP_VERSION = "0.2.8"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -115,6 +115,28 @@ MAIN_HEADERS = [
     TRANSACTION_ID_HEADER,
     OPERATION_TYPE_HEADER,
 ]
+
+SUMMARY_GROUP_FIELDS = {
+    "Узагальнена назва": MAIN_HEADERS[11],
+    "Узагальнена назва номенклатури": MAIN_HEADERS[10],
+    "Номер матеріалу в SAP": MAIN_HEADERS[13],
+}
+
+SUMMARY_OUTPUT_HEADERS = [
+    "№ з/п",
+    "Групування",
+    "Значення",
+    "Кількість позицій",
+    "Загальна кількість",
+    "Загальна сума",
+    "Справні",
+    "Несправні",
+    "В ремонті",
+    "Знищені",
+    "Втрачені",
+    "Списані",
+]
+
 
 CHANGE_HEADERS = [
     "№ з/п", "Дата і час", "Тип активу", "Таблиця", "Інв. №",
@@ -308,10 +330,10 @@ class OblikWorkbook:
         ws_staff.freeze_panes = "A2"
 
         ws_summary = wb.create_sheet(SHEET_SUMMARY)
-        summary_headers = ["№ з/п", "Найменування ОВТ", "За штатом", "За списком", "Наявні", "Несправні", "Потреба", "БПВ", "Забезпеченість", "Примітка", "Дані"]
-        for col, header in enumerate(summary_headers, 1):
+        for col, header in enumerate(SUMMARY_OUTPUT_HEADERS, 1):
             ws_summary.cell(1, col, header)
-        self._style_header(ws_summary, 1, len(summary_headers))
+        self._style_header(ws_summary, 1, len(SUMMARY_OUTPUT_HEADERS))
+        ws_summary.freeze_panes = "A2"
 
         ws_changes = wb.create_sheet(SHEET_CHANGES)
         for col, header in enumerate(CHANGE_HEADERS, 1):
@@ -757,6 +779,123 @@ class OblikWorkbook:
             elif score == best and score > 0:
                 rows.append(rnum)
         return DuplicateInfo(best, tuple(rows))
+
+    def build_summary_dataframe(self, group_header: str) -> pd.DataFrame:
+        """Агрегує актуальний Поточний стан за вибраним полем."""
+        if group_header not in SUMMARY_GROUP_FIELDS.values():
+            raise ValueError(f"Непідтримуване поле групування: {group_header}")
+
+        current = self.dataframe(SHEET_CURRENT)
+        if current.empty:
+            return pd.DataFrame(columns=SUMMARY_OUTPUT_HEADERS)
+
+        groups: dict[str, dict[str, Any]] = {}
+        for _, row in current.iterrows():
+            raw_group = display_value(row.get(group_header)).strip()
+            group_value = raw_group or "Не вказано"
+
+            quantity = numeric_value(row.get(MAIN_HEADERS[16]))
+            if quantity is None:
+                # Для поштучного майна без явно заданої кількості один
+                # поточний рядок означає одну одиницю.
+                quantity = 1.0 if (
+                    norm(row.get(MAIN_HEADERS[9]))
+                    or norm(row.get(MAIN_HEADERS[18]))
+                ) else 0.0
+
+            price = numeric_value(row.get(MAIN_HEADERS[15]))
+            total = (price * quantity) if price is not None else 0.0
+            status = norm(row.get(MAIN_HEADERS[23]))
+
+            bucket = groups.setdefault(
+                group_value,
+                {
+                    "Кількість позицій": 0,
+                    "Загальна кількість": 0.0,
+                    "Загальна сума": 0.0,
+                    "Справні": 0.0,
+                    "Несправні": 0.0,
+                    "В ремонті": 0.0,
+                    "Знищені": 0.0,
+                    "Втрачені": 0.0,
+                    "Списані": 0.0,
+                },
+            )
+            bucket["Кількість позицій"] += 1
+            bucket["Загальна кількість"] += quantity
+            bucket["Загальна сума"] += total
+
+            if "передан" in status and "ремонт" in status:
+                bucket["В ремонті"] += quantity
+            elif "несправ" in status:
+                bucket["Несправні"] += quantity
+            elif "знищ" in status:
+                bucket["Знищені"] += quantity
+            elif "втрач" in status:
+                bucket["Втрачені"] += quantity
+            elif "спис" in status:
+                bucket["Списані"] += quantity
+            elif "справ" in status:
+                bucket["Справні"] += quantity
+
+        rows = []
+        group_label = next(
+            label for label, header in SUMMARY_GROUP_FIELDS.items()
+            if header == group_header
+        )
+        for index, group_value in enumerate(
+            sorted(groups, key=lambda value: value.casefold()),
+            start=1,
+        ):
+            bucket = groups[group_value]
+            rows.append({
+                "№ з/п": index,
+                "Групування": group_label,
+                "Значення": group_value,
+                **bucket,
+            })
+
+        return pd.DataFrame(rows, columns=SUMMARY_OUTPUT_HEADERS)
+
+    def rebuild_summary(self, group_header: str) -> pd.DataFrame:
+        """Перебудовує аркуш Зведений відповідно до вибраного режиму."""
+        summary = self.build_summary_dataframe(group_header)
+        ws = self.wb[SHEET_SUMMARY]
+
+        # Зведений є похідним аркушем, тому його вміст можна безпечно
+        # перебудовувати з Поточного стану.
+        if ws.max_row > 0:
+            ws.delete_rows(1, ws.max_row)
+
+        for col, header in enumerate(SUMMARY_OUTPUT_HEADERS, 1):
+            ws.cell(1, col, header)
+        self._style_header(ws, 1, len(SUMMARY_OUTPUT_HEADERS))
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(SUMMARY_OUTPUT_HEADERS))}1"
+
+        for row_index, record in enumerate(summary.to_dict("records"), start=2):
+            for col_index, header in enumerate(SUMMARY_OUTPUT_HEADERS, start=1):
+                ws.cell(row_index, col_index, record.get(header))
+
+        widths = {
+            "A": 8,
+            "B": 32,
+            "C": 42,
+            "D": 18,
+            "E": 18,
+            "F": 20,
+            "G": 14,
+            "H": 14,
+            "I": 14,
+            "J": 14,
+            "K": 14,
+            "L": 14,
+        }
+        for column, width in widths.items():
+            ws.column_dimensions[column].width = width
+
+        self.dirty = True
+        return summary
 
     def rebuild_current_state(self) -> tuple[int, int]:
         """Поточний стан по поштучному майну. Штатну потребу не перераховує."""
