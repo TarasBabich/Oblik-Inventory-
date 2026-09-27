@@ -165,6 +165,27 @@ def main():
     drag = SimpleNamespace(primary_delta=4, local_delta=SimpleNamespace(x=80, y=80))
     assert FletOblikApp._drag_delta(drag, "x") == 4
     assert FletOblikApp._drag_delta(drag, "y") == 4
+    # Послідовні позиції курсора змінюють ширину точно на пройдені пікселі,
+    # а в книзі зберігається кінцева ширина цієї колонки.
+    drag_app = object.__new__(FletOblikApp)
+    drag_app.model = OblikWorkbook()
+    drag_app.model.wb = __import__("openpyxl").Workbook()
+    drag_app.model.wb.active.title = SHEET_STAFF
+    drag_app.staff_column_widths = {1: 100.0}
+    drag_app.staff_column_controls = {1: [ft.Container(width=100)]}
+    drag_app.staff_grid_control = None
+    drag_app.staff_column_drag_x = {}
+    drag_app.page = SimpleNamespace(update=lambda: None)
+    drag_app.status = ft.Text("")
+    pos = lambda x: SimpleNamespace(global_position=SimpleNamespace(x=x))
+    drag_app._start_staff_column_drag(1, pos(200))
+    drag_app._pan_staff_column(1, pos(212))
+    drag_app._pan_staff_column(1, pos(225))
+    assert drag_app.staff_column_widths[1] == 125
+    assert drag_app.staff_column_controls[1][0].width == 125
+    assert drag_app.model.wb[SHEET_STAFF].column_dimensions["A"].width == 15.62
+    drag_app._end_staff_column_drag(1)
+    assert 1 not in drag_app.staff_column_drag_x
     assert STAFF_MIN_COLUMN_WIDTH < STAFF_MAX_COLUMN_WIDTH
     assert STAFF_MIN_ROW_HEIGHT < STAFF_MAX_ROW_HEIGHT
 
