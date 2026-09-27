@@ -217,32 +217,45 @@ def staff_ui_numbered_values(
     left_index: int,
     right_index: int,
 ) -> tuple[list[Any], int, int, bool, bool]:
-    """Підміняє Excel-формули № з/п на числа для двох таблиць «Штат»."""
+    """Показує людську нумерацію для двох незалежних таблиць аркуша «Штат»."""
+
+    # Працюємо з копією рядка, щоб відображення в Flet не змінювало Excel-дані.
     result = list(values)
+
+    # Аркуш «Штат» має фіксовану структуру A:M, тому доповнюємо короткі рядки
+    # порожніми значеннями, якщо Excel фактично не створив крайні комірки.
     while len(result) < 13:
         result.append(None)
 
+    # Ліва таблиця вважається заповненою, якщо є дані хоча б у B:E.
+    # Колонку A навмисно не враховуємо, бо там може лежати лише формула =ROW()-1.
     left_has_data = any(
         result[col - 1] not in (None, "")
         for col in range(2, 6)
     )
+
+    # Права таблиця вважається заповненою, якщо є дані хоча б у H:M.
+    # Колонку G теж не враховуємо з тієї ж причини — це службовий № з/п.
     right_has_data = any(
         result[col - 1] not in (None, "")
         for col in range(8, 14)
     )
 
+    # Ліва таблиця має власну нумерацію 1, 2, 3... незалежно від Excel-формули.
     if left_has_data:
         left_index += 1
         result[0] = left_index
     else:
         result[0] = None
 
+    # Права таблиця нумерується окремо від лівої, тому її лічильник незалежний.
     if right_has_data:
         right_index += 1
         result[6] = right_index
     else:
         result[6] = None
 
+    # Повертаємо вже підготовлений для інтерфейсу рядок і обидва нові лічильники.
     return result, left_index, right_index, left_has_data, right_has_data
 
 
