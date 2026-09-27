@@ -299,9 +299,20 @@ def main():
         assert orphan_row["Наявні (справні)"] == 1
         assert pd.isna(orphan_row["% забезпеченості справних"])
 
+        # Штатна позиція без жодної фактичної одиниці все одно має бути
+        # присутня у Зведеному з нульовим поточним станом.
+        ws_staff["B4"] = "NOM-D"
+        ws_staff["C4"] = "Номенклатура Г"
+        ws_staff["D4"] = 7
+
         by_nomenclature = reloaded.build_summary_dataframe(MAIN_HEADERS[10])
-        assert len(by_nomenclature) == 3
-        assert set(by_nomenclature["Найменування"]) == {"Номенклатура А", "Номенклатура Б", "Номенклатура В"}
+        assert len(by_nomenclature) == 4
+        assert set(by_nomenclature["Найменування"]) == {
+            "Номенклатура А",
+            "Номенклатура Б",
+            "Номенклатура В",
+            "Номенклатура Г",
+        }
         nomenclature_a = by_nomenclature[
             by_nomenclature["Найменування"] == "Номенклатура А"
         ].iloc[0]
@@ -310,8 +321,18 @@ def main():
         assert nomenclature_a["Наявні (справні)"] == 1
         assert abs(nomenclature_a["% забезпеченості справних"] - 20.0) < 1e-9
 
+        staff_only = by_nomenclature[
+            by_nomenclature["Найменування"] == "Номенклатура Г"
+        ].iloc[0]
+        assert staff_only["Штат"] == 7
+        assert staff_only["За обліком"] == 0
+        assert staff_only["Наявні (справні)"] == 0
+        assert staff_only["Несправні"] == 0
+        assert "Немає в поточному стані" in staff_only["Примітка"]
+        assert staff_only["% забезпеченості справних"] == 0
+
         by_sap = reloaded.rebuild_summary(MAIN_HEADERS[13])
-        assert len(by_sap) == 2
+        assert len(by_sap) == 3
         sap_001 = by_sap[by_sap["Найменування"] == "SAP-001"].iloc[0]
         assert sap_001["Штат"] == 8
         ws_summary = reloaded.wb[SHEET_SUMMARY]
