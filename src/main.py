@@ -1691,8 +1691,18 @@ class FletOblikApp:
         }
         for sheet in REQUIRED_SHEETS:
             button = ft.Button(
-                content=sheet,
-                icon=nav_icons[sheet],
+                # Кнопка Flet центрує пару icon+content за замовчуванням.
+                # Власний Row розтягується на ширину кнопки, щоб усі
+                # піктограми й підписи починались з одного лівого краю.
+                content=ft.Row(
+                    expand=True,
+                    alignment=ft.MainAxisAlignment.START,
+                    spacing=12,
+                    controls=[
+                        ft.Icon(nav_icons[sheet], size=19, color=ft.Colors.WHITE),
+                        ft.Text(sheet, size=13, color=ft.Colors.WHITE),
+                    ],
+                ),
                 data=sheet,
                 on_click=self._select_sheet,
                 width=220,
@@ -1705,8 +1715,15 @@ class FletOblikApp:
         nav_controls.extend([
             ft.Divider(color="#405B4B"),
             ft.Button(
-                content="Налаштування",
-                icon=ft.Icons.SETTINGS,
+                content=ft.Row(
+                    expand=True,
+                    alignment=ft.MainAxisAlignment.START,
+                    spacing=12,
+                    controls=[
+                        ft.Icon(ft.Icons.SETTINGS, size=19, color=ft.Colors.WHITE),
+                        ft.Text("Налаштування", size=13, color=ft.Colors.WHITE),
+                    ],
+                ),
                 data=SETTINGS_VIEW,
                 on_click=self._select_sheet,
                 width=220,
