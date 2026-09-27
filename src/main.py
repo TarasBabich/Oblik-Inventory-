@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.8"
+APP_VERSION = "0.2.9"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -124,17 +124,14 @@ SUMMARY_GROUP_FIELDS = {
 
 SUMMARY_OUTPUT_HEADERS = [
     "№ з/п",
-    "Групування",
-    "Значення",
-    "Кількість позицій",
-    "Загальна кількість",
-    "Загальна сума",
-    "Справні",
+    "Найменування",
+    "Штат",
+    "За обліком",
+    "Наявні (справні)",
     "Несправні",
-    "В ремонті",
-    "Знищені",
-    "Втрачені",
-    "Списані",
+    "БПВ",
+    "% забезпеченості справних",
+    "Примітка",
 ]
 
 
@@ -780,8 +777,33 @@ class OblikWorkbook:
                 rows.append(rnum)
         return DuplicateInfo(best, tuple(rows))
 
+    def _staff_need_lookup(self) -> dict[str, float]:
+        """Штат за номенклатурою з лівої агрегованої частини аркуша «Штат»."""
+        if self.wb is None or SHEET_STAFF not in self.wb.sheetnames:
+            return {}
+        ws = self.wb[SHEET_STAFF]
+        lookup: dict[str, float] = {}
+        for row in range(2, ws.max_row + 1):
+            code = norm(ws.cell(row, 2).value)
+            name = norm(ws.cell(row, 3).value)
+            quantity = numeric_value(ws.cell(row, 4).value)
+            if quantity is None:
+                continue
+            # Код є основним ключем. Назву також зберігаємо як резервний ключ.
+            if code:
+                lookup["code:" + code] = max(
+                    quantity,
+                    lookup.get("code:" + code, 0.0),
+                )
+            if name:
+                lookup["name:" + name] = max(
+                    quantity,
+                    lookup.get("name:" + name, 0.0),
+                )
+        return lookup
+
     def build_summary_dataframe(self, group_header: str) -> pd.DataFrame:
-        """Агрегує актуальний Поточний стан за вибраним полем."""
+        """Агрегує актуальний «Поточний стан» у формат зведеної таблиці."""
         if group_header not in SUMMARY_GROUP_FIELDS.values():
             raise ValueError(f"Непідтримуване поле групування: {group_header}")
 
@@ -789,107 +811,143 @@ class OblikWorkbook:
         if current.empty:
             return pd.DataFrame(columns=SUMMARY_OUTPUT_HEADERS)
 
+        staff_lookup = self._staff_need_lookup()
         groups: dict[str, dict[str, Any]] = {}
+
         for _, row in current.iterrows():
             raw_group = display_value(row.get(group_header)).strip()
             group_value = raw_group or "Не вказано"
 
             quantity = numeric_value(row.get(MAIN_HEADERS[16]))
             if quantity is None:
-                # Для поштучного майна без явно заданої кількості один
-                # поточний рядок означає одну одиницю.
                 quantity = 1.0 if (
                     norm(row.get(MAIN_HEADERS[9]))
                     or norm(row.get(MAIN_HEADERS[18]))
                 ) else 0.0
 
-            price = numeric_value(row.get(MAIN_HEADERS[15]))
-            total = (price * quantity) if price is not None else 0.0
             status = norm(row.get(MAIN_HEADERS[23]))
+            operation = norm(row.get(OPERATION_TYPE_HEADER))
+            written_off = (
+                "спис" in status
+                or operation == "списання"
+                or operation == "передача в іншу частину"
+            )
+
+            nomenclature_code = norm(row.get(MAIN_HEADERS[7]))
+            nomenclature_name = norm(row.get(MAIN_HEADERS[10]))
+            nomenclature_key = (
+                "code:" + nomenclature_code
+                if nomenclature_code
+                else "name:" + nomenclature_name
+                if nomenclature_name
+                else "row:" + str(int(row.get("_excel_row", 0)))
+            )
 
             bucket = groups.setdefault(
                 group_value,
                 {
-                    "Кількість позицій": 0,
-                    "Загальна кількість": 0.0,
-                    "Загальна сума": 0.0,
-                    "Справні": 0.0,
+                    "Штат": 0.0,
+                    "За обліком": 0.0,
+                    "Наявні (справні)": 0.0,
                     "Несправні": 0.0,
-                    "В ремонті": 0.0,
-                    "Знищені": 0.0,
-                    "Втрачені": 0.0,
-                    "Списані": 0.0,
+                    "БПВ": 0.0,
+                    "_staff_keys": set(),
+                    "_notes": [],
                 },
             )
-            bucket["Кількість позицій"] += 1
-            bucket["Загальна кількість"] += quantity
-            bucket["Загальна сума"] += total
 
-            if "передан" in status and "ремонт" in status:
-                bucket["В ремонті"] += quantity
-            elif "несправ" in status:
-                bucket["Несправні"] += quantity
-            elif "знищ" in status:
-                bucket["Знищені"] += quantity
-            elif "втрач" in status:
-                bucket["Втрачені"] += quantity
-            elif "спис" in status:
-                bucket["Списані"] += quantity
-            elif "справ" in status:
-                bucket["Справні"] += quantity
+            # Штат рахуємо один раз на номенклатуру, щоб однакове значення
+            # «Штатна потреба» не множилось на кількість інвентарних одиниць.
+            if nomenclature_key not in bucket["_staff_keys"]:
+                staff_value = None
+                if nomenclature_code:
+                    staff_value = staff_lookup.get("code:" + nomenclature_code)
+                if staff_value is None and nomenclature_name:
+                    staff_value = staff_lookup.get("name:" + nomenclature_name)
+                if staff_value is None:
+                    staff_value = numeric_value(row.get(MAIN_HEADERS[14]))
+                if staff_value is not None:
+                    bucket["Штат"] += staff_value
+                bucket["_staff_keys"].add(nomenclature_key)
+
+            if not written_off:
+                bucket["За обліком"] += quantity
+
+                if "передан" in status and "ремонт" in status:
+                    bucket["Несправні"] += quantity
+                elif "несправ" in status:
+                    bucket["Несправні"] += quantity
+                elif "знищ" in status:
+                    bucket["БПВ"] += quantity
+                elif "справ" in status:
+                    bucket["Наявні (справні)"] += quantity
+
+            note = display_value(row.get("Примітка")).strip()
+            if note and note not in bucket["_notes"]:
+                bucket["_notes"].append(note)
 
         rows = []
-        group_label = next(
-            label for label, header in SUMMARY_GROUP_FIELDS.items()
-            if header == group_header
-        )
         for index, group_value in enumerate(
             sorted(groups, key=lambda value: value.casefold()),
             start=1,
         ):
             bucket = groups[group_value]
+            staff = float(bucket["Штат"])
+            serviceable = float(bucket["Наявні (справні)"])
+            readiness = (serviceable / staff * 100.0) if staff > 0 else None
+
             rows.append({
                 "№ з/п": index,
-                "Групування": group_label,
-                "Значення": group_value,
-                **bucket,
+                "Найменування": group_value,
+                "Штат": staff,
+                "За обліком": bucket["За обліком"],
+                "Наявні (справні)": serviceable,
+                "Несправні": bucket["Несправні"],
+                "БПВ": bucket["БПВ"],
+                "% забезпеченості справних": readiness,
+                "Примітка": "; ".join(bucket["_notes"]),
             })
 
         return pd.DataFrame(rows, columns=SUMMARY_OUTPUT_HEADERS)
 
     def rebuild_summary(self, group_header: str) -> pd.DataFrame:
-        """Перебудовує аркуш Зведений відповідно до вибраного режиму."""
+        """Перебудовує аркуш «Зведений» за вибраним режимом."""
         summary = self.build_summary_dataframe(group_header)
         ws = self.wb[SHEET_SUMMARY]
 
-        # Зведений є похідним аркушем, тому його вміст можна безпечно
-        # перебудовувати з Поточного стану.
         if ws.max_row > 0:
             ws.delete_rows(1, ws.max_row)
 
-        for col, header in enumerate(SUMMARY_OUTPUT_HEADERS, 1):
+        group_label = next(
+            label for label, header in SUMMARY_GROUP_FIELDS.items()
+            if header == group_header
+        )
+        excel_headers = list(SUMMARY_OUTPUT_HEADERS)
+        excel_headers[1] = group_label
+
+        for col, header in enumerate(excel_headers, 1):
             ws.cell(1, col, header)
-        self._style_header(ws, 1, len(SUMMARY_OUTPUT_HEADERS))
+        self._style_header(ws, 1, len(excel_headers))
         ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(SUMMARY_OUTPUT_HEADERS))}1"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(excel_headers))}1"
 
         for row_index, record in enumerate(summary.to_dict("records"), start=2):
             for col_index, header in enumerate(SUMMARY_OUTPUT_HEADERS, start=1):
-                ws.cell(row_index, col_index, record.get(header))
+                value = record.get(header)
+                ws.cell(row_index, col_index, value)
+                if header == "% забезпеченості справних" and value is not None:
+                    ws.cell(row_index, col_index).number_format = '0.00"%"'
 
         widths = {
             "A": 8,
-            "B": 32,
-            "C": 42,
-            "D": 18,
-            "E": 18,
-            "F": 20,
+            "B": 42,
+            "C": 14,
+            "D": 16,
+            "E": 20,
+            "F": 16,
             "G": 14,
-            "H": 14,
-            "I": 14,
-            "J": 14,
-            "K": 14,
-            "L": 14,
+            "H": 24,
+            "I": 48,
         }
         for column, width in widths.items():
             ws.column_dimensions[column].width = width
@@ -1911,37 +1969,55 @@ class FletOblikApp:
             summary = summary[mask]
 
         visible_headers = [h for h in SUMMARY_OUTPUT_HEADERS if h != "№ з/п"]
-        columns = [
-            ft.DataColumn(
-                label=ft.Container(
-                    width=190 if header != "Значення" else 320,
-                    padding=4,
-                    content=ft.Text(
-                        header,
-                        size=12,
-                        weight=ft.FontWeight.BOLD,
-                    ),
+
+        def summary_column_width(header: str) -> int:
+            if header == "Найменування":
+                return 360
+            if header == "Примітка":
+                return 360
+            if header == "% забезпеченості справних":
+                return 220
+            if header == "Наявні (справні)":
+                return 190
+            return 150
+
+        columns = []
+        for header in visible_headers:
+            label = self.summary_group_mode if header == "Найменування" else header
+            columns.append(
+                ft.DataColumn(
+                    label=ft.Container(
+                        width=summary_column_width(header),
+                        padding=4,
+                        content=ft.Text(
+                            label,
+                            size=12,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                    )
                 )
             )
-            for header in visible_headers
-        ]
 
         rows = []
+        numeric_headers = {
+            "Штат",
+            "За обліком",
+            "Наявні (справні)",
+            "Несправні",
+            "БПВ",
+        }
         for _, record in summary.iterrows():
             cells = []
             for header in visible_headers:
                 value = record.get(header)
-                if header == "Загальна сума":
-                    cell_text = format_decimal(numeric_value(value), 2)
-                elif header in (
-                    "Загальна кількість",
-                    "Справні",
-                    "Несправні",
-                    "В ремонті",
-                    "Знищені",
-                    "Втрачені",
-                    "Списані",
-                ):
+                if header == "% забезпеченості справних":
+                    number = numeric_value(value)
+                    cell_text = (
+                        "—"
+                        if number is None
+                        else f"{format_decimal(number, 2)} %"
+                    )
+                elif header in numeric_headers:
                     number = numeric_value(value)
                     if number is None:
                         cell_text = ""
@@ -1954,9 +2030,13 @@ class FletOblikApp:
                 cells.append(
                     ft.DataCell(
                         ft.Container(
-                            width=190 if header != "Значення" else 320,
+                            width=summary_column_width(header),
                             padding=4,
-                            content=ft.Text(cell_text, size=12, max_lines=3),
+                            content=ft.Text(
+                                cell_text,
+                                size=12,
+                                max_lines=4 if header == "Примітка" else 3,
+                            ),
                         )
                     )
                 )
@@ -1973,9 +2053,9 @@ class FletOblikApp:
             fixed_corner_color=ft.Colors.BLUE_100,
             visible_horizontal_scroll_bar=True,
             visible_vertical_scroll_bar=True,
-            min_width=max(1250, len(visible_headers) * 205),
-            heading_row_height=58,
-            data_row_height=58,
+            min_width=1900,
+            heading_row_height=68,
+            data_row_height=70,
             column_spacing=8,
             horizontal_margin=8,
         )
@@ -1984,8 +2064,9 @@ class FletOblikApp:
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
                 content=ft.Text(
-                    "Джерело: «Поточний стан». Зміна режиму не змінює дані — "
-                    "лише спосіб їх групування.",
+                    "Джерело: «Поточний стан». Штат береться з аркуша «Штат», "
+                    "а за відсутності відповідності — з поля «Штатна потреба». "
+                    "Зміна режиму змінює лише спосіб групування.",
                     size=12,
                     color=ft.Colors.BLUE_GREY_600,
                 ),
