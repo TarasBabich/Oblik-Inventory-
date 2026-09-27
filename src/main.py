@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.13"
+APP_VERSION = "0.2.14"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -142,10 +142,37 @@ CHANGE_HEADERS = [
 ]
 
 STAFF_HEADERS = [
-    "№ з/п", "Номенклатурний код", "Найменування згідно номенклатору",
-    "Узагальнена кількість за військову частину", "", "",
-    "№ з/п", "Номенклатурний код", "Найменування згідно номенклатору",
-    "Кількість", "Окремий підрозділ бригади", "Окремий підрозділ батальйону/дивізіону",
+    # Таблиця 1 — агрегований штат по військовій частині (A:E)
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Од. виміру",
+    "Узагальнена кількість за військову частину",
+    "",  # F — візуальний роздільник між таблицями
+
+    # Таблиця 2 — деталізація штатної потреби по підрозділах (G:M)
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Од. виміру",
+    "Кількість",
+    "Окремий підрозділ бригади",
+    "Окремий підрозділ батальйону/дивізіону",
+]
+
+OLD_STAFF_HEADERS = [
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Узагальнена кількість за військову частину",
+    "",
+    "",
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Кількість",
+    "Окремий підрозділ бригади",
+    "Окремий підрозділ батальйону/дивізіону",
 ]
 
 DUPLICATE_FIELDS = {
@@ -391,6 +418,8 @@ class OblikWorkbook:
             # Після міграції/відкриття приводимо розрахункові колонки до правил.
             self._restore_row_formulas(ws)
 
+        if self._ensure_staff_sheet_schema(self.wb[SHEET_STAFF]):
+            migrated = True
         if self._ensure_change_sheet_schema(self.wb[SHEET_CHANGES]):
             migrated = True
         if self._ensure_transaction_ids():
@@ -417,6 +446,77 @@ class OblikWorkbook:
             changed = True
         if changed:
             ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}1"
+        return changed
+
+    def _ensure_staff_sheet_schema(self, ws) -> bool:
+        """Приводить аркуш «Штат» до двох таблиць A:E та G:M."""
+        headers = [
+            str(ws.cell(1, col).value or "")
+            for col in range(1, max(ws.max_column, len(STAFF_HEADERS)) + 1)
+        ]
+
+        # Правильна структура вже є — лише нормалізуємо оформлення.
+        if headers[:len(STAFF_HEADERS)] == STAFF_HEADERS:
+            self._style_header(ws, 1, len(STAFF_HEADERS))
+            ws.freeze_panes = "A2"
+            ws.column_dimensions["F"].width = 3
+            return False
+
+        # Міграція попереднього шаблону Oblik 0.2.x:
+        # A:D = агрегована таблиця, G:L = деталізація.
+        if headers[:len(OLD_STAFF_HEADERS)] == OLD_STAFF_HEADERS:
+            max_row = ws.max_row
+            old_rows = []
+            for row in range(2, max_row + 1):
+                old_rows.append([
+                    ws.cell(row, col).value
+                    for col in range(1, len(OLD_STAFF_HEADERS) + 1)
+                ])
+
+            # Очищаємо стару ширину таблиці і записуємо правильну схему.
+            for row in range(1, max_row + 1):
+                for col in range(1, max(len(STAFF_HEADERS), len(OLD_STAFF_HEADERS)) + 1):
+                    ws.cell(row, col).value = None
+
+            for col, header in enumerate(STAFF_HEADERS, 1):
+                ws.cell(1, col, header)
+
+            for row_index, old in enumerate(old_rows, start=2):
+                # Таблиця 1: A,B,C -> A,B,C; D(кількість) -> E.
+                ws.cell(row_index, 1, old[0])
+                ws.cell(row_index, 2, old[1])
+                ws.cell(row_index, 3, old[2])
+                ws.cell(row_index, 4, None)       # Од. виміру
+                ws.cell(row_index, 5, old[3])     # Узагальнена кількість
+
+                # Таблиця 2: G,H,I -> G,H,I; J(кількість) -> K;
+                # K,L -> L,M. J стає «Од. виміру».
+                ws.cell(row_index, 7, old[6])
+                ws.cell(row_index, 8, old[7])
+                ws.cell(row_index, 9, old[8])
+                ws.cell(row_index, 10, None)      # Од. виміру
+                ws.cell(row_index, 11, old[9])    # Кількість
+                ws.cell(row_index, 12, old[10])   # Підрозділ бригади
+                ws.cell(row_index, 13, old[11])   # Батальйон/дивізіон
+
+            self._style_header(ws, 1, len(STAFF_HEADERS))
+            ws.freeze_panes = "A2"
+            ws.column_dimensions["F"].width = 3
+            return True
+
+        # Не переписуємо довільний користувацький «Штат». Якщо перші
+        # колонки відповідають правильній структурі, просто доповнюємо шапку.
+        changed = False
+        for col, header in enumerate(STAFF_HEADERS, 1):
+            if str(ws.cell(1, col).value or "") != header:
+                # Автоматично виправляємо тільки порожні службові заголовки.
+                if is_blank(ws.cell(1, col).value):
+                    ws.cell(1, col, header)
+                    changed = True
+        if changed:
+            self._style_header(ws, 1, len(STAFF_HEADERS))
+            ws.freeze_panes = "A2"
+            ws.column_dimensions["F"].width = 3
         return changed
 
     def _ensure_change_sheet_schema(self, ws) -> bool:
@@ -797,7 +897,8 @@ class OblikWorkbook:
         for row in range(2, ws.max_row + 1):
             code_raw = ws.cell(row, 2).value
             name_raw = ws.cell(row, 3).value
-            quantity = numeric_value(ws.cell(row, 4).value)
+            unit = display_value(ws.cell(row, 4).value).strip()
+            quantity = numeric_value(ws.cell(row, 5).value)
             if is_blank(code_raw) and is_blank(name_raw) and quantity is None:
                 continue
 
@@ -807,6 +908,7 @@ class OblikWorkbook:
                 "key": key,
                 "code": display_value(code_raw).strip(),
                 "name": display_value(name_raw).strip(),
+                "unit": unit,
                 "quantity": float(quantity or 0.0),
                 "excel_row": row,
             }
