@@ -69,6 +69,19 @@ def main():
     assert sticky_table.fixed_left_columns == 1
     assert sticky_table.visible_horizontal_scroll_bar is True
 
+    hover_container = ft.Container(on_hover=lambda e: None)
+    row2 = fdt.DataRow2(
+        cells=[ft.DataCell(ft.Text("test"))],
+        on_tap=lambda e: None,
+    )
+    popup = ft.PopupMenuButton(
+        on_open=lambda e: None,
+        items=[ft.PopupMenuItem(content="Дія")],
+    )
+    assert hover_container.on_hover is not None
+    assert row2.on_tap is not None
+    assert popup.on_open is not None
+
     summary_dropdown = ft.Dropdown(
         value="Узагальнена назва",
         options=[
