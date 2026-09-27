@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS, staff_ui_numbered_values)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS, staff_ui_numbered_values, estimate_staff_row_height)
 import pandas as pd
 import flet as ft
 import flet_datatable2 as fdt
@@ -128,6 +128,22 @@ def main():
     assert numbered2[0] is None
     assert numbered2[6] == 2
     assert left_no == 1 and right_no == 2
+
+    # Довге найменування повинно збільшувати висоту рядка, а не обрізатися.
+    short_height = estimate_staff_row_height([
+        1, "NOM-A", "Коротка назва", "од.", 1, None,
+        1, "NOM-A", "Коротка назва", "од.", 1, "РРЕБ", None,
+    ])
+    long_height = estimate_staff_row_height([
+        1, "NOM-A",
+        "КОМПЛЕКС РАДІОЕЛЕКТРОННОЇ БОРОТЬБИ З БЕЗПІЛОТНИМИ ЛІТАЛЬНИМИ АПАРАТАМИ БУКОВЕЛЬ-АД",
+        "од.", 1, None,
+        1, "NOM-A",
+        "КОМПЛЕКС РАДІОЕЛЕКТРОННОЇ БОРОТЬБИ З БЕЗПІЛОТНИМИ ЛІТАЛЬНИМИ АПАРАТАМИ БУКОВЕЛЬ-АД",
+        "од.", 1, "РРЕБ", None,
+    ])
+    assert short_height >= 70
+    assert long_height > short_height
 
     assert format_inventory_number("ОВТ-", 25, 6) == "ОВТ-000025"
     assert format_inventory_number("100-", 7, 4, "/26") == "100-0007/26"
