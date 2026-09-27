@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.11"
+APP_VERSION = "0.2.12"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -2134,10 +2134,15 @@ class FletOblikApp:
             control = self.row_action_controls.get(row_id)
             if control is None:
                 continue
-            control.visible = (
+            shown = (
                 row_id == self.selected_excel_row
                 or row_id == self.hovered_excel_row
             )
+            # DataCell у Flet вимагає видимий Control. Тому сам контейнер
+            # ніколи не ховаємо через visible=False: приховуємо лише opacity.
+            control.opacity = 1.0 if shown else 0.0
+            if isinstance(control.content, ft.PopupMenuButton):
+                control.content.disabled = not shown
             try:
                 control.update()
             except Exception:
@@ -2214,13 +2219,16 @@ class FletOblikApp:
             ),
             items=self._row_action_items(),
         )
+        shown = (
+            excel_row == self.selected_excel_row
+            or excel_row == self.hovered_excel_row
+        )
+        menu.disabled = not shown
         host = ft.Container(
             width=105,
             alignment=ft.Alignment.CENTER,
-            visible=(
-                excel_row == self.selected_excel_row
-                or excel_row == self.hovered_excel_row
-            ),
+            visible=True,
+            opacity=1.0 if shown else 0.0,
             on_hover=lambda e, row=excel_row: self._hover_row(row, e),
             content=menu,
         )

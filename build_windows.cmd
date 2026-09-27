@@ -32,8 +32,8 @@ if exist dist rmdir /s /q dist
   --name Oblik ^
   --distpath dist ^
   --product-name "Oblik Inventory" ^
-  --product-version 0.2.11 ^
-  --file-version 0.2.11.0 ^
+  --product-version 0.2.12 ^
+  --file-version 0.2.12.0 ^
   src\main.py
 if errorlevel 1 goto :error
 
