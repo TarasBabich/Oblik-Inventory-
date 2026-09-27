@@ -350,8 +350,7 @@ class OblikWorkbook:
         ws_staff = wb.create_sheet(SHEET_STAFF)
         for col, header in enumerate(STAFF_HEADERS, 1):
             ws_staff.cell(1, col, header)
-        self._style_header(ws_staff, 1, len(STAFF_HEADERS))
-        ws_staff.freeze_panes = "A2"
+        self._style_staff_sheet(ws_staff)
 
         ws_summary = wb.create_sheet(SHEET_SUMMARY)
         for col, header in enumerate(SUMMARY_OUTPUT_HEADERS, 1):
@@ -377,6 +376,56 @@ class OblikWorkbook:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(MAIN_HEADERS))}1"
         for idx in range(1, len(MAIN_HEADERS) + 1):
             ws.column_dimensions[get_column_letter(idx)].width = 18
+
+    def _style_staff_sheet(self, ws) -> None:
+        """Оформлення двох окремих таблиць на аркуші «Штат»."""
+        fill = PatternFill("solid", fgColor="1F4E78")
+        side = Side(style="thin", color="A0A0A0")
+
+        # Таблиця 1: A:E. Таблиця 2: G:M. F — роздільник.
+        for start_col, end_col in ((1, 5), (7, 13)):
+            for col in range(start_col, end_col + 1):
+                cell = ws.cell(1, col)
+                cell.fill = fill
+                cell.font = Font(color="FFFFFF", bold=True)
+                cell.alignment = Alignment(
+                    horizontal="center",
+                    vertical="center",
+                    wrap_text=True,
+                )
+                cell.border = Border(
+                    left=side,
+                    right=side,
+                    top=side,
+                    bottom=side,
+                )
+
+        separator = ws.cell(1, 6)
+        separator.value = ""
+        separator.fill = PatternFill(fill_type=None)
+        separator.border = Border()
+        separator.font = Font(color="000000", bold=False)
+
+        widths = {
+            "A": 9,
+            "B": 22,
+            "C": 42,
+            "D": 12,
+            "E": 24,
+            "F": 3,
+            "G": 9,
+            "H": 22,
+            "I": 42,
+            "J": 12,
+            "K": 14,
+            "L": 23,
+            "M": 30,
+        }
+        for column, width in widths.items():
+            ws.column_dimensions[column].width = width
+
+        ws.row_dimensions[1].height = 72
+        ws.freeze_panes = "A2"
 
     def _style_header(self, ws, row: int, count: int) -> None:
         fill = PatternFill("solid", fgColor="1F4E78")
@@ -457,9 +506,7 @@ class OblikWorkbook:
 
         # Правильна структура вже є — лише нормалізуємо оформлення.
         if headers[:len(STAFF_HEADERS)] == STAFF_HEADERS:
-            self._style_header(ws, 1, len(STAFF_HEADERS))
-            ws.freeze_panes = "A2"
-            ws.column_dimensions["F"].width = 3
+            self._style_staff_sheet(ws)
             return False
 
         # Міграція попереднього шаблону Oblik 0.2.x:
@@ -499,9 +546,7 @@ class OblikWorkbook:
                 ws.cell(row_index, 12, old[10])   # Підрозділ бригади
                 ws.cell(row_index, 13, old[11])   # Батальйон/дивізіон
 
-            self._style_header(ws, 1, len(STAFF_HEADERS))
-            ws.freeze_panes = "A2"
-            ws.column_dimensions["F"].width = 3
+            self._style_staff_sheet(ws)
             return True
 
         # Не переписуємо довільний користувацький «Штат». Якщо перші
@@ -514,9 +559,7 @@ class OblikWorkbook:
                     ws.cell(1, col, header)
                     changed = True
         if changed:
-            self._style_header(ws, 1, len(STAFF_HEADERS))
-            ws.freeze_panes = "A2"
-            ws.column_dimensions["F"].width = 3
+            self._style_staff_sheet(ws)
         return changed
 
     def _ensure_change_sheet_schema(self, ws) -> bool:
