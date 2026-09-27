@@ -2773,21 +2773,22 @@ class FletOblikApp:
         )
 
     def _render_staff(self) -> None:
-        """Показує дві таблиці «Штат» з реальною індивідуальною висотою рядків."""
+        """Показує «Штат» з Excel-подібним resize колонок і рядків."""
 
-        # Очищаємо попередній вміст, щоб аркуш «Штат» будувався заново
-        # після кожного відкриття книги, пошуку або зміни аркуша.
+        # При кожному render створюємо нові UI-посилання, але самі ручні
+        # розміри колонок/рядків зберігаємо у state та Workbook.
         self.table_host.controls.clear()
+        self.staff_column_controls = defaultdict(list)
+        self.staff_row_controls = defaultdict(list)
+        self.staff_grid_control = None
 
-        # Заголовок сторінки і шлях до книги залишаються синхронними
-        # з тим Excel-файлом, який зараз відкрито в програмі.
+        # Заголовок сторінки і шлях завжди відповідають відкритій книзі.
         self.sheet_title.value = SHEET_STAFF
         self.file_label.value = (
             str(self.model.path) if self.model.path else "Файл не відкрито"
         )
 
-        # На аркуші «Штат» користувачеві потрібен пошук, але не дії
-        # транзакцій і не перемикачі зведеної таблиці.
+        # На «Штат» залишаємо пошук, а транзакційні кнопки приховуємо.
         self.search.visible = True
         self.btn_add.visible = False
         self.btn_edit.visible = False
@@ -2796,8 +2797,7 @@ class FletOblikApp:
         self.summary_group_dropdown.visible = False
         self.btn_summary_refresh.visible = False
 
-        # Якщо книга ще не відкрита, показуємо зрозуміле повідомлення
-        # замість спроби побудувати порожню таблицю.
+        # Без відкритої книги таблицю будувати немає з чого.
         if self.model.wb is None or SHEET_STAFF not in self.model.wb.sheetnames:
             self.table_host.controls.append(
                 ft.Container(
@@ -2811,88 +2811,113 @@ class FletOblikApp:
             self.page.update()
             return
 
-        # Працюємо напряму з Excel-комірками, тому повторювані заголовки
-        # двох таблиць не конфліктують між собою через pandas.
+        # Працюємо напряму з A:M, щоб дві штатні таблиці не змішувалися.
         ws = self.model.wb[SHEET_STAFF]
         query = norm(self.search.value)
 
-        # Ширини відповідають структурі A:E | F | G:M.
-        # F — лише візуальний роздільник між двома незалежними таблицями.
-        widths = {
-            1: 70,
-            2: 180,
-            3: 360,
-            4: 105,
-            5: 200,
-            6: 24,
-            7: 70,
-            8: 180,
-            9: 360,
-            10: 105,
-            11: 120,
-            12: 210,
-            13: 250,
-        }
+        # Для нової/повторно відкритої книги перечитуємо ширини та висоти
+        # з Excel; у межах поточної сесії ручний resize лишається в state.
+        self._ensure_staff_layout_state(ws)
+        widths = self.staff_column_widths
 
-        # Повна ширина потрібна зовнішній горизонтальній прокрутці,
-        # щоб шапка й усі рядки рухалися синхронно вправо/вліво.
+        # Повна ширина сітки змінюється разом із колонками.
         table_width = sum(widths.values())
 
-        # Спочатку формуємо шапку. Вона знаходиться над вертикальним
-        # списком рядків, тому при прокручуванні вниз залишається на місці.
+        # ------------------------------
+        # ФІКСОВАНА ШАПКА + RESIZE КОЛОНОК
+        # ------------------------------
         header_cells = []
         for col, header in enumerate(STAFF_HEADERS, start=1):
+            width = float(widths[col])
+
             if col == 6:
-                # F — порожній вузький проміжок між таблицями.
-                header_cells.append(
-                    ft.Container(
-                        width=widths[col],
-                        height=76,
-                        bgcolor=ft.Colors.WHITE,
-                    )
+                # F — порожній службовий роздільник, його не resize-имо.
+                separator = ft.Container(
+                    width=width,
+                    height=76,
+                    bgcolor=ft.Colors.WHITE,
                 )
+                self.staff_column_controls[col].append(separator)
+                header_cells.append(separator)
                 continue
 
-            # Кожен заголовок має фіксовану ширину, а текст переноситься.
-            header_cells.append(
-                ft.Container(
-                    width=widths[col],
-                    height=76,
-                    padding=ft.Padding.symmetric(horizontal=6, vertical=8),
-                    alignment=ft.Alignment.CENTER,
-                    bgcolor=ft.Colors.BLUE_50,
-                    border=ft.Border(
-                        bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
-                    ),
-                    content=ft.Text(
-                        header,
-                        size=11,
-                        weight=ft.FontWeight.BOLD,
-                        text_align=ft.TextAlign.CENTER,
-                        no_wrap=False,
-                    ),
-                )
+            # Основний вміст заголовка займає всю ширину колонки.
+            header_content = ft.Container(
+                width=width,
+                height=76,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=8),
+                alignment=ft.Alignment.CENTER,
+                bgcolor=ft.Colors.BLUE_50,
+                border=ft.Border(
+                    bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
+                ),
+                content=ft.Text(
+                    header,
+                    size=11,
+                    weight=ft.FontWeight.BOLD,
+                    text_align=ft.TextAlign.CENTER,
+                    no_wrap=False,
+                ),
             )
 
-        # Одна спільна шапка гарантує точне вирівнювання колонок
-        # лівої та правої частини аркуша «Штат».
+            # Вузька зона справа від заголовка працює як межа колонки в Excel.
+            # Курсор одразу показує, що межу можна тягнути вліво/вправо.
+            column_handle = ft.GestureDetector(
+                width=8,
+                height=76,
+                right=0,
+                top=0,
+                mouse_cursor=ft.MouseCursor.RESIZE_LEFT_RIGHT,
+                drag_interval=30,
+                on_horizontal_drag_update=(
+                    lambda e, column=col: self._resize_staff_column(column, e)
+                ),
+                on_horizontal_drag_end=self._staff_resize_finished,
+                on_double_tap=(
+                    lambda e, column=col: self._reset_staff_column_width(column, e)
+                ),
+                content=ft.Container(
+                    width=8,
+                    height=76,
+                    bgcolor=ft.Colors.TRANSPARENT,
+                ),
+            )
+
+            # Stack накладає drag-зону точно на праву межу заголовка.
+            header_stack = ft.Stack(
+                width=width,
+                height=76,
+                controls=[
+                    header_content,
+                    column_handle,
+                ],
+            )
+
+            # Зберігаємо всі controls, ширина яких має змінюватися разом.
+            self.staff_column_controls[col].extend([
+                header_stack,
+                header_content,
+            ])
+            header_cells.append(header_stack)
+
+        # Одна шапка використовується одразу для обох штатних таблиць.
         header_row = ft.Row(
             spacing=0,
             controls=header_cells,
         )
 
-        # Рядки двох таблиць нумеруються незалежно: A і G мають
-        # власні послідовності 1, 2, 3..., незалежно від Excel-формул.
+        # ------------------------------
+        # ТІЛО ТАБЛИЦІ + RESIZE РЯДКІВ
+        # ------------------------------
         left_index = 0
         right_index = 0
         body_rows = []
 
         for row_no in range(2, ws.max_row + 1):
-            # Читаємо рівно A:M, бо саме так визначена структура «Штат».
+            # Читаємо один Excel-рядок A:M.
             values = [ws.cell(row_no, col).value for col in range(1, 14)]
 
-            # Підміняємо службові формули =ROW()-1 на звичайні числа
-            # тільки у відображенні програми; сам Excel-файл не змінюється.
+            # У програмі № з/п показуємо числами, не формулами =ROW()-1.
             (
                 values,
                 left_index,
@@ -2901,57 +2926,129 @@ class FletOblikApp:
                 right_has_data,
             ) = staff_ui_numbered_values(values, left_index, right_index)
 
-            # Рядок без даних у жодній таблиці не займає місце на екрані.
+            # Повністю порожній рядок не рендеримо.
             if not left_has_data and not right_has_data:
                 continue
 
-            # Пошук працює одразу по обох таблицях цього Excel-рядка.
+            # Пошук перевіряє одночасно ліву і праву штатні таблиці.
             if query and not any(
                 query in norm(display_value(value))
                 for value in values
             ):
                 continue
 
-            # Ключова логіка: висота розраховується ОКРЕМО для цього рядка.
-            # Тому довге найменування збільшує тільки свій рядок.
-            row_height = estimate_staff_row_height(values)
+            # Автовисота є базою. Якщо користувач вже змінював цей рядок
+            # вручну, ручне значення має пріоритет.
+            auto_height = estimate_staff_row_height(values)
+            row_height = float(
+                self.staff_row_heights.get(row_no, auto_height)
+            )
+            row_height = max(
+                STAFF_MIN_ROW_HEIGHT,
+                min(STAFF_MAX_ROW_HEIGHT, row_height),
+            )
 
             row_cells = []
             for col, value in enumerate(values, start=1):
+                width = float(widths[col])
+
                 if col == 6:
-                    # Порожній F не має рамок і візуально розділяє таблиці.
-                    row_cells.append(
-                        ft.Container(
-                            width=widths[col],
-                            height=row_height,
-                            bgcolor=ft.Colors.WHITE,
-                        )
+                    # Порожній F лишається роздільником, але росте по висоті
+                    # разом із відповідним Excel-рядком.
+                    separator = ft.Container(
+                        width=width,
+                        height=row_height,
+                        bgcolor=ft.Colors.WHITE,
                     )
+                    self.staff_column_controls[col].append(separator)
+                    self.staff_row_controls[row_no].append(separator)
+                    row_cells.append(separator)
                     continue
 
-                # Висоту задаємо кожній комірці цього рядка однаково.
-                # Це гарантує, що весь рядок росте разом із найдовшою назвою.
-                row_cells.append(
-                    ft.Container(
-                        width=widths[col],
-                        height=row_height,
-                        padding=ft.Padding.symmetric(horizontal=6, vertical=8),
-                        alignment=ft.Alignment.CENTER_LEFT,
-                        border=ft.Border(
-                            bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_100),
-                        ),
-                        content=ft.Text(
-                            display_value(value),
-                            size=12,
-                            # Ліміту рядків немає — назва завжди показується повністю.
-                            max_lines=None,
-                            no_wrap=False,
-                        ),
-                    )
+                # Звичайна комірка має реальні width/height, які можна
+                # змінювати без повного перебудування всієї таблиці.
+                cell_content = ft.Container(
+                    width=width,
+                    height=row_height,
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=8),
+                    alignment=ft.Alignment.CENTER_LEFT,
+                    border=ft.Border(
+                        bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_100),
+                    ),
+                    content=ft.Text(
+                        display_value(value),
+                        size=12,
+                        max_lines=None,
+                        no_wrap=False,
+                    ),
                 )
 
-            # На відміну від DataTable2, звичайний Row повністю поважає
-            # індивідуальну висоту, яку ми обчислили саме для цього запису.
+                # Вертикальний resize робимо з нижньої межі колонок № з/п.
+                # Межу можна тягнути як у лівій (A), так і в правій (G) таблиці.
+                if col in (1, 7):
+                    row_handle = ft.GestureDetector(
+                        width=width,
+                        height=8,
+                        left=0,
+                        bottom=0,
+                        mouse_cursor=ft.MouseCursor.RESIZE_UP_DOWN,
+                        drag_interval=30,
+                        on_vertical_drag_update=(
+                            lambda e, excel_row=row_no: self._resize_staff_row(
+                                excel_row,
+                                e,
+                            )
+                        ),
+                        on_vertical_drag_end=self._staff_resize_finished,
+                        on_double_tap=(
+                            lambda e, excel_row=row_no, fitted=auto_height:
+                                self._reset_staff_row_height(
+                                    excel_row,
+                                    fitted,
+                                    e,
+                                )
+                        ),
+                        content=ft.Container(
+                            width=width,
+                            height=8,
+                            bgcolor=ft.Colors.TRANSPARENT,
+                        ),
+                    )
+
+                    # Stack дозволяє накласти drag-зону на нижню межу
+                    # без додавання зайвої висоти до самого рядка.
+                    cell_outer = ft.Stack(
+                        width=width,
+                        height=row_height,
+                        controls=[
+                            cell_content,
+                            row_handle,
+                        ],
+                    )
+
+                    # При зміні ширини колонки змінюється і горизонтальна
+                    # зона vertical-resize у номерній комірці.
+                    self.staff_column_controls[col].extend([
+                        cell_outer,
+                        cell_content,
+                        row_handle,
+                    ])
+
+                    # При зміні висоти рядка ростуть Stack і основна комірка.
+                    self.staff_row_controls[row_no].extend([
+                        cell_outer,
+                        cell_content,
+                    ])
+                    row_cells.append(cell_outer)
+                    continue
+
+                # Для інших колонок достатньо одного Container.
+                self.staff_column_controls[col].append(cell_content)
+                self.staff_row_controls[row_no].append(cell_content)
+                row_cells.append(cell_content)
+
+            # Один Row представляє один Excel-рядок і автоматично вирівнює
+            # ліву та праву таблиці по одній висоті.
             body_rows.append(
                 ft.Row(
                     spacing=0,
@@ -2959,16 +3056,15 @@ class FletOblikApp:
                 )
             )
 
-        # Вертикально прокручується тільки тіло таблиці.
-        # Шапка залишається зафіксованою зверху.
+        # Тіло прокручується вертикально, шапка при цьому лишається зверху.
         body = ft.ListView(
             expand=True,
             spacing=0,
             controls=body_rows,
         )
 
-        # Шапка і тіло лежать в одному контейнері однакової ширини,
-        # тому зовнішня горизонтальна прокрутка рухає їх синхронно.
+        # Шапка і тіло знаходяться в одній сітці, тому горизонтальний
+        # scrollbar рухає їх синхронно.
         staff_grid = ft.Container(
             width=table_width,
             expand=True,
@@ -2981,8 +3077,9 @@ class FletOblikApp:
                 ],
             ),
         )
+        self.staff_grid_control = staff_grid
 
-        # Горизонтальний повзунок залишається внизу таблиці.
+        # Нижній scrollbar відповідає за горизонтальну навігацію всієї сітки.
         horizontal_host = ft.Row(
             expand=True,
             scroll=ft.Scrollbar(
@@ -2996,14 +3093,16 @@ class FletOblikApp:
             controls=[staff_grid],
         )
 
-        # Коротке пояснення зверху допомагає відрізняти призначення
-        # лівої агрегованої таблиці від правої деталізації по підрозділах.
+        # Коротка підказка пояснює і структуру, і нове керування розмірами.
         self.table_host.controls.extend([
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
                 content=ft.Text(
                     "Ліва таблиця — узагальнений штат військової частини. "
-                    "Права — деталізація штатної потреби по підрозділах.",
+                    "Права — деталізація по підрозділах. "
+                    "Тягніть праву межу заголовка для ширини колонки; "
+                    "нижню межу № з/п — для висоти рядка. "
+                    "Подвійний клік повертає базовий/автоматичний розмір.",
                     size=12,
                     color=ft.Colors.BLUE_GREY_600,
                 ),
@@ -3014,7 +3113,7 @@ class FletOblikApp:
             ),
         ])
 
-        # Нижній статус показує кількість реально відображених рядків.
+        # Статус показує кількість рядків, які реально потрапили у view.
         self.status.value = (
             f"{SHEET_STAFF}: {len(body_rows)} рядків | {self.model.path or ''}"
         )
