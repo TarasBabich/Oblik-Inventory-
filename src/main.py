@@ -2614,9 +2614,19 @@ class FletOblikApp:
 
     @staticmethod
     def _drag_delta(e, axis: str) -> float:
-        """Безпечно витягує delta з Flet DragUpdateEvent для resize."""
+        """Повертає приріст від ПОПЕРЕДНЬОЇ події перетягування."""
 
-        # У Flet 1.x основне поле — local_delta.x / local_delta.y.
+        # У Flet 1.x local_delta означає рух ВІД ПОЧАТКУ жесту. Якщо
+        # додавати його на кожному update, розмір стрибає або впирається
+        # у максимум. Для осьового drag потрібен primary_delta.
+        primary_delta = getattr(e, "primary_delta", None)
+        if primary_delta is not None:
+            try:
+                return float(primary_delta)
+            except (TypeError, ValueError):
+                return 0.0
+
+        # Для старіших версій події залишаємо сумісність із local_delta.
         local_delta = getattr(e, "local_delta", None)
         if local_delta is not None:
             value = getattr(local_delta, axis, 0.0)
@@ -2863,12 +2873,12 @@ class FletOblikApp:
             # Вузька зона справа від заголовка працює як межа колонки в Excel.
             # Курсор одразу показує, що межу можна тягнути вліво/вправо.
             column_handle = ft.GestureDetector(
-                width=8,
+                width=12,
                 height=76,
                 right=0,
                 top=0,
                 mouse_cursor=ft.MouseCursor.RESIZE_LEFT_RIGHT,
-                drag_interval=30,
+                drag_interval=0,
                 on_horizontal_drag_update=(
                     lambda e, column=col: self._resize_staff_column(column, e)
                 ),
@@ -2877,9 +2887,9 @@ class FletOblikApp:
                     lambda e, column=col: self._reset_staff_column_width(column, e)
                 ),
                 content=ft.Container(
-                    width=8,
+                    width=12,
                     height=76,
-                    bgcolor=ft.Colors.TRANSPARENT,
+                    bgcolor=ft.Colors.BLUE_GREY_100,
                 ),
             )
 
@@ -2988,11 +2998,11 @@ class FletOblikApp:
                 if col in (1, 7):
                     row_handle = ft.GestureDetector(
                         width=width,
-                        height=8,
+                        height=12,
                         left=0,
                         bottom=0,
                         mouse_cursor=ft.MouseCursor.RESIZE_UP_DOWN,
-                        drag_interval=30,
+                        drag_interval=0,
                         on_vertical_drag_update=(
                             lambda e, excel_row=row_no: self._resize_staff_row(
                                 excel_row,
@@ -3010,8 +3020,8 @@ class FletOblikApp:
                         ),
                         content=ft.Container(
                             width=width,
-                            height=8,
-                            bgcolor=ft.Colors.TRANSPARENT,
+                            height=12,
+                            bgcolor=ft.Colors.BLUE_GREY_100,
                         ),
                     )
 
