@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.16"
+APP_VERSION = "0.2.17"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -159,6 +159,31 @@ STAFF_HEADERS = [
     "Окремий підрозділ бригади",
     "Окремий підрозділ батальйону/дивізіону",
 ]
+
+# Базові розміри сітки «Штат» у пікселях.
+# Користувач може змінювати їх перетягуванням меж, як у Excel.
+STAFF_DEFAULT_COLUMN_WIDTHS = {
+    1: 70,
+    2: 180,
+    3: 360,
+    4: 105,
+    5: 200,
+    6: 24,   # F — службовий роздільник між двома таблицями.
+    7: 70,
+    8: 180,
+    9: 360,
+    10: 105,
+    11: 120,
+    12: 210,
+    13: 250,
+}
+
+# Обмеження не дають випадково «схлопнути» колонку або рядок повністю.
+STAFF_MIN_COLUMN_WIDTH = 48
+STAFF_MAX_COLUMN_WIDTH = 700
+STAFF_MIN_ROW_HEIGHT = 34
+STAFF_MAX_ROW_HEIGHT = 600
+
 
 OLD_STAFF_HEADERS = [
     "№ з/п",
@@ -1433,6 +1458,16 @@ class FletOblikApp:
         self.hovered_excel_row: Optional[int] = None
         self.row_action_controls: dict[int, ft.Container] = {}
         self.row_table_rows: dict[int, fdt.DataRow2] = {}
+
+        # Розміри сітки «Штат» зберігаються в пам'яті під час роботи програми.
+        # Після ручного resize вони також записуються в параметри Excel-аркуша,
+        # тому після «Зберегти» відкриються знову з тими самими розмірами.
+        self.staff_layout_source_key: Optional[str] = None
+        self.staff_column_widths: dict[int, float] = dict(STAFF_DEFAULT_COLUMN_WIDTHS)
+        self.staff_row_heights: dict[int, float] = {}
+        self.staff_column_controls: dict[int, list[ft.Control]] = defaultdict(list)
+        self.staff_row_controls: dict[int, list[ft.Control]] = defaultdict(list)
+        self.staff_grid_control: Optional[ft.Container] = None
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
