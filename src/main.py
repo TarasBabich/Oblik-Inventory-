@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.15"
+APP_VERSION = "0.2.16"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -2535,13 +2535,21 @@ class FletOblikApp:
         return host
 
     def _render_staff(self) -> None:
-        """Показує дві таблиці аркуша «Штат» без втрати повторюваних заголовків."""
+        """Показує дві таблиці «Штат» з реальною індивідуальною висотою рядків."""
+
+        # Очищаємо попередній вміст, щоб аркуш «Штат» будувався заново
+        # після кожного відкриття книги, пошуку або зміни аркуша.
         self.table_host.controls.clear()
+
+        # Заголовок сторінки і шлях до книги залишаються синхронними
+        # з тим Excel-файлом, який зараз відкрито в програмі.
         self.sheet_title.value = SHEET_STAFF
         self.file_label.value = (
             str(self.model.path) if self.model.path else "Файл не відкрито"
         )
 
+        # На аркуші «Штат» користувачеві потрібен пошук, але не дії
+        # транзакцій і не перемикачі зведеної таблиці.
         self.search.visible = True
         self.btn_add.visible = False
         self.btn_edit.visible = False
@@ -2550,6 +2558,8 @@ class FletOblikApp:
         self.summary_group_dropdown.visible = False
         self.btn_summary_refresh.visible = False
 
+        # Якщо книга ще не відкрита, показуємо зрозуміле повідомлення
+        # замість спроби побудувати порожню таблицю.
         if self.model.wb is None or SHEET_STAFF not in self.model.wb.sheetnames:
             self.table_host.controls.append(
                 ft.Container(
@@ -2563,23 +2573,88 @@ class FletOblikApp:
             self.page.update()
             return
 
+        # Працюємо напряму з Excel-комірками, тому повторювані заголовки
+        # двох таблиць не конфліктують між собою через pandas.
         ws = self.model.wb[SHEET_STAFF]
         query = norm(self.search.value)
-        rows = []
 
+        # Ширини відповідають структурі A:E | F | G:M.
+        # F — лише візуальний роздільник між двома незалежними таблицями.
         widths = {
-            1: 70,   2: 180, 3: 360, 4: 105, 5: 200,
+            1: 70,
+            2: 180,
+            3: 360,
+            4: 105,
+            5: 200,
             6: 24,
-            7: 70,   8: 180, 9: 360, 10: 105, 11: 120, 12: 210, 13: 250,
+            7: 70,
+            8: 180,
+            9: 360,
+            10: 105,
+            11: 120,
+            12: 210,
+            13: 250,
         }
 
+        # Повна ширина потрібна зовнішній горизонтальній прокрутці,
+        # щоб шапка й усі рядки рухалися синхронно вправо/вліво.
+        table_width = sum(widths.values())
+
+        # Спочатку формуємо шапку. Вона знаходиться над вертикальним
+        # списком рядків, тому при прокручуванні вниз залишається на місці.
+        header_cells = []
+        for col, header in enumerate(STAFF_HEADERS, start=1):
+            if col == 6:
+                # F — порожній вузький проміжок між таблицями.
+                header_cells.append(
+                    ft.Container(
+                        width=widths[col],
+                        height=76,
+                        bgcolor=ft.Colors.WHITE,
+                    )
+                )
+                continue
+
+            # Кожен заголовок має фіксовану ширину, а текст переноситься.
+            header_cells.append(
+                ft.Container(
+                    width=widths[col],
+                    height=76,
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=8),
+                    alignment=ft.Alignment.CENTER,
+                    bgcolor=ft.Colors.BLUE_50,
+                    border=ft.Border(
+                        bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
+                    ),
+                    content=ft.Text(
+                        header,
+                        size=11,
+                        weight=ft.FontWeight.BOLD,
+                        text_align=ft.TextAlign.CENTER,
+                        no_wrap=False,
+                    ),
+                )
+            )
+
+        # Одна спільна шапка гарантує точне вирівнювання колонок
+        # лівої та правої частини аркуша «Штат».
+        header_row = ft.Row(
+            spacing=0,
+            controls=header_cells,
+        )
+
+        # Рядки двох таблиць нумеруються незалежно: A і G мають
+        # власні послідовності 1, 2, 3..., незалежно від Excel-формул.
         left_index = 0
         right_index = 0
+        body_rows = []
+
         for row_no in range(2, ws.max_row + 1):
+            # Читаємо рівно A:M, бо саме так визначена структура «Штат».
             values = [ws.cell(row_no, col).value for col in range(1, 14)]
 
-            # У програмі не показуємо Excel-формули типу =ROW()-1.
-            # Обидві таблиці мають власну незалежну послідовну нумерацію.
+            # Підміняємо службові формули =ROW()-1 на звичайні числа
+            # тільки у відображенні програми; сам Excel-файл не змінюється.
             (
                 values,
                 left_index,
@@ -2587,80 +2662,104 @@ class FletOblikApp:
                 left_has_data,
                 right_has_data,
             ) = staff_ui_numbered_values(values, left_index, right_index)
+
+            # Рядок без даних у жодній таблиці не займає місце на екрані.
             if not left_has_data and not right_has_data:
                 continue
 
-            if query and not any(query in norm(display_value(value)) for value in values):
+            # Пошук працює одразу по обох таблицях цього Excel-рядка.
+            if query and not any(
+                query in norm(display_value(value))
+                for value in values
+            ):
                 continue
 
-            # Кожен рядок отримує власну висоту. Короткі назви залишаються
-            # компактними, а довгі збільшують тільки свій рядок.
+            # Ключова логіка: висота розраховується ОКРЕМО для цього рядка.
+            # Тому довге найменування збільшує тільки свій рядок.
             row_height = estimate_staff_row_height(values)
 
-            cells = []
+            row_cells = []
             for col, value in enumerate(values, start=1):
                 if col == 6:
-                    cells.append(
-                        ft.DataCell(
-                            ft.Container(width=widths[col])
+                    # Порожній F не має рамок і візуально розділяє таблиці.
+                    row_cells.append(
+                        ft.Container(
+                            width=widths[col],
+                            height=row_height,
+                            bgcolor=ft.Colors.WHITE,
                         )
                     )
                     continue
-                cells.append(
-                    ft.DataCell(
-                        ft.Container(
-                            width=widths[col],
-                            padding=4,
-                            content=ft.Text(
-                                display_value(value),
-                                size=12,
-                                # Назви в C та I показуємо повністю без ліміту рядків.
-                                # Для інших колонок теж не обрізаємо текст штучно.
-                                max_lines=None,
-                                no_wrap=False,
-                            ),
-                        )
-                    )
-                )
-            rows.append(ft.DataRow(cells=cells))
 
-        columns = []
-        for col, header in enumerate(STAFF_HEADERS, start=1):
-            if col == 6:
-                columns.append(
-                    ft.DataColumn(label=ft.Container(width=widths[col]))
-                )
-                continue
-            columns.append(
-                ft.DataColumn(
-                    label=ft.Container(
+                # Висоту задаємо кожній комірці цього рядка однаково.
+                # Це гарантує, що весь рядок росте разом із найдовшою назвою.
+                row_cells.append(
+                    ft.Container(
                         width=widths[col],
-                        padding=4,
+                        height=row_height,
+                        padding=ft.Padding.symmetric(horizontal=6, vertical=8),
+                        alignment=ft.Alignment.CENTER_LEFT,
+                        border=ft.Border(
+                            bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_100),
+                        ),
                         content=ft.Text(
-                            header,
-                            size=11,
-                            weight=ft.FontWeight.BOLD,
-                            text_align=ft.TextAlign.CENTER,
+                            display_value(value),
+                            size=12,
+                            # Ліміту рядків немає — назва завжди показується повністю.
+                            max_lines=None,
+                            no_wrap=False,
                         ),
                     )
                 )
+
+            # На відміну від DataTable2, звичайний Row повністю поважає
+            # індивідуальну висоту, яку ми обчислили саме для цього запису.
+            body_rows.append(
+                ft.Row(
+                    spacing=0,
+                    controls=row_cells,
+                )
             )
 
-        table = fdt.DataTable2(
-            columns=columns,
-            rows=rows,
+        # Вертикально прокручується тільки тіло таблиці.
+        # Шапка залишається зафіксованою зверху.
+        body = ft.ListView(
             expand=True,
-            heading_row_color=ft.Colors.BLUE_50,
-            fixed_top_rows=1,
-            visible_horizontal_scroll_bar=True,
-            visible_vertical_scroll_bar=True,
-            min_width=2300,
-            heading_row_height=76,
-            data_row_height=70,
-            column_spacing=4,
-            horizontal_margin=4,
+            spacing=0,
+            controls=body_rows,
         )
 
+        # Шапка і тіло лежать в одному контейнері однакової ширини,
+        # тому зовнішня горизонтальна прокрутка рухає їх синхронно.
+        staff_grid = ft.Container(
+            width=table_width,
+            expand=True,
+            content=ft.Column(
+                expand=True,
+                spacing=0,
+                controls=[
+                    header_row,
+                    body,
+                ],
+            ),
+        )
+
+        # Горизонтальний повзунок залишається внизу таблиці.
+        horizontal_host = ft.Row(
+            expand=True,
+            scroll=ft.Scrollbar(
+                orientation=ft.ScrollbarOrientation.BOTTOM,
+                thumb_visibility=True,
+                track_visibility=True,
+                interactive=True,
+                thickness=12,
+                radius=8,
+            ),
+            controls=[staff_grid],
+        )
+
+        # Коротке пояснення зверху допомагає відрізняти призначення
+        # лівої агрегованої таблиці від правої деталізації по підрозділах.
         self.table_host.controls.extend([
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
@@ -2671,11 +2770,15 @@ class FletOblikApp:
                     color=ft.Colors.BLUE_GREY_600,
                 ),
             ),
-            ft.Container(expand=True, content=table),
+            ft.Container(
+                expand=True,
+                content=horizontal_host,
+            ),
         ])
 
+        # Нижній статус показує кількість реально відображених рядків.
         self.status.value = (
-            f"{SHEET_STAFF}: {len(rows)} рядків | {self.model.path or ''}"
+            f"{SHEET_STAFF}: {len(body_rows)} рядків | {self.model.path or ''}"
         )
         self.page.update()
 
