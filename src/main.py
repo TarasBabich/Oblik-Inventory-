@@ -1479,6 +1479,7 @@ class FletOblikApp:
         self.staff_column_controls: dict[int, list[ft.Control]] = defaultdict(list)
         self.staff_row_controls: dict[int, list[ft.Control]] = defaultdict(list)
         self.staff_grid_control: Optional[ft.Container] = None
+        self.staff_column_drag_x: dict[int, float] = {}
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -2825,6 +2826,35 @@ class FletOblikApp:
         # Оновлюємо екран одним циклом, щоб перетягування було плавним.
         self.page.update()
 
+    def _start_staff_column_drag(self, col: int, e) -> None:
+        """Фіксує глобальну координату миші перед зміною ширини."""
+        position = getattr(e, "global_position", None)
+        x = getattr(position, "x", None)
+        if x is not None:
+            self.staff_column_drag_x[col] = float(x)
+
+    def _pan_staff_column(self, col: int, e) -> None:
+        """Вимірює реальний рух миші навіть усередині горизонтального scroll."""
+        position = getattr(e, "global_position", None)
+        x = getattr(position, "x", None)
+        if x is None:
+            # Для подій без глобальної позиції Flet дає покроковий приріст.
+            self._resize_staff_column(col, e)
+            return
+        x = float(x)
+        previous = self.staff_column_drag_x.get(col)
+        self.staff_column_drag_x[col] = x
+        if previous is not None:
+            self._resize_staff_column(
+                col,
+                type("ColumnDragDelta", (), {"primary_delta": x - previous})(),
+            )
+
+    def _end_staff_column_drag(self, col: int, e=None) -> None:
+        """Завершує жест, щоб наступне перетягування почалося з нуля."""
+        self.staff_column_drag_x.pop(col, None)
+        self._staff_resize_finished(e)
+
     def _reset_staff_column_width(self, col: int, e=None) -> None:
         """Подвійний клік по межі повертає колонці базову ширину."""
 
@@ -3013,23 +3043,31 @@ class FletOblikApp:
             # Вузька зона справа від заголовка працює як межа колонки в Excel.
             # Курсор одразу показує, що межу можна тягнути вліво/вправо.
             column_handle = ft.GestureDetector(
-                width=12,
+                width=18,
                 height=76,
                 right=0,
                 top=0,
                 mouse_cursor=ft.MouseCursor.RESIZE_LEFT_RIGHT,
                 drag_interval=0,
-                on_horizontal_drag_update=(
-                    lambda e, column=col: self._resize_staff_column(column, e)
+                # Пан-жест бере керування навіть коли батьківська таблиця
+                # підтримує горизонтальну прокрутку. Глобальна позиція
+                # не змінює систему координат при збільшенні заголовка.
+                on_pan_start=(
+                    lambda e, column=col: self._start_staff_column_drag(column, e)
                 ),
-                on_horizontal_drag_end=self._staff_resize_finished,
+                on_pan_update=(
+                    lambda e, column=col: self._pan_staff_column(column, e)
+                ),
+                on_pan_end=(
+                    lambda e, column=col: self._end_staff_column_drag(column, e)
+                ),
                 on_double_tap=(
                     lambda e, column=col: self._reset_staff_column_width(column, e)
                 ),
                 content=ft.Container(
-                    width=12,
+                    width=18,
                     height=76,
-                    bgcolor=ft.Colors.BLUE_GREY_100,
+                    bgcolor=UI_ACCENT,
                 ),
             )
 
