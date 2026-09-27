@@ -1969,37 +1969,55 @@ class FletOblikApp:
             summary = summary[mask]
 
         visible_headers = [h for h in SUMMARY_OUTPUT_HEADERS if h != "№ з/п"]
-        columns = [
-            ft.DataColumn(
-                label=ft.Container(
-                    width=190 if header != "Значення" else 320,
-                    padding=4,
-                    content=ft.Text(
-                        header,
-                        size=12,
-                        weight=ft.FontWeight.BOLD,
-                    ),
+
+        def summary_column_width(header: str) -> int:
+            if header == "Найменування":
+                return 360
+            if header == "Примітка":
+                return 360
+            if header == "% забезпеченості справних":
+                return 220
+            if header == "Наявні (справні)":
+                return 190
+            return 150
+
+        columns = []
+        for header in visible_headers:
+            label = self.summary_group_mode if header == "Найменування" else header
+            columns.append(
+                ft.DataColumn(
+                    label=ft.Container(
+                        width=summary_column_width(header),
+                        padding=4,
+                        content=ft.Text(
+                            label,
+                            size=12,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                    )
                 )
             )
-            for header in visible_headers
-        ]
 
         rows = []
+        numeric_headers = {
+            "Штат",
+            "За обліком",
+            "Наявні (справні)",
+            "Несправні",
+            "БПВ",
+        }
         for _, record in summary.iterrows():
             cells = []
             for header in visible_headers:
                 value = record.get(header)
-                if header == "Загальна сума":
-                    cell_text = format_decimal(numeric_value(value), 2)
-                elif header in (
-                    "Загальна кількість",
-                    "Справні",
-                    "Несправні",
-                    "В ремонті",
-                    "Знищені",
-                    "Втрачені",
-                    "Списані",
-                ):
+                if header == "% забезпеченості справних":
+                    number = numeric_value(value)
+                    cell_text = (
+                        "—"
+                        if number is None
+                        else f"{format_decimal(number, 2)} %"
+                    )
+                elif header in numeric_headers:
                     number = numeric_value(value)
                     if number is None:
                         cell_text = ""
@@ -2012,9 +2030,13 @@ class FletOblikApp:
                 cells.append(
                     ft.DataCell(
                         ft.Container(
-                            width=190 if header != "Значення" else 320,
+                            width=summary_column_width(header),
                             padding=4,
-                            content=ft.Text(cell_text, size=12, max_lines=3),
+                            content=ft.Text(
+                                cell_text,
+                                size=12,
+                                max_lines=4 if header == "Примітка" else 3,
+                            ),
                         )
                     )
                 )
@@ -2031,9 +2053,9 @@ class FletOblikApp:
             fixed_corner_color=ft.Colors.BLUE_100,
             visible_horizontal_scroll_bar=True,
             visible_vertical_scroll_bar=True,
-            min_width=max(1250, len(visible_headers) * 205),
-            heading_row_height=58,
-            data_row_height=58,
+            min_width=1900,
+            heading_row_height=68,
+            data_row_height=70,
             column_spacing=8,
             horizontal_margin=8,
         )
@@ -2042,8 +2064,9 @@ class FletOblikApp:
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
                 content=ft.Text(
-                    "Джерело: «Поточний стан». Зміна режиму не змінює дані — "
-                    "лише спосіб їх групування.",
+                    "Джерело: «Поточний стан». Штат береться з аркуша «Штат», "
+                    "а за відсутності відповідності — з поля «Штатна потреба». "
+                    "Зміна режиму змінює лише спосіб групування.",
                     size=12,
                     color=ft.Colors.BLUE_GREY_600,
                 ),
