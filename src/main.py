@@ -933,6 +933,8 @@ class OblikWorkbook:
         for row_index, record in enumerate(summary.to_dict("records"), start=2):
             for col_index, header in enumerate(SUMMARY_OUTPUT_HEADERS, start=1):
                 value = record.get(header)
+                if is_blank(value):
+                    value = None
                 ws.cell(row_index, col_index, value)
                 if header == "% забезпеченості справних" and value is not None:
                     ws.cell(row_index, col_index).number_format = '0.00"%"'
