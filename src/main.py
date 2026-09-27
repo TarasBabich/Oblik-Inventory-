@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.13"
+APP_VERSION = "0.2.14"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -142,10 +142,37 @@ CHANGE_HEADERS = [
 ]
 
 STAFF_HEADERS = [
-    "№ з/п", "Номенклатурний код", "Найменування згідно номенклатору",
-    "Узагальнена кількість за військову частину", "", "",
-    "№ з/п", "Номенклатурний код", "Найменування згідно номенклатору",
-    "Кількість", "Окремий підрозділ бригади", "Окремий підрозділ батальйону/дивізіону",
+    # Таблиця 1 — агрегований штат по військовій частині (A:E)
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Од. виміру",
+    "Узагальнена кількість за військову частину",
+    "",  # F — візуальний роздільник між таблицями
+
+    # Таблиця 2 — деталізація штатної потреби по підрозділах (G:M)
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Од. виміру",
+    "Кількість",
+    "Окремий підрозділ бригади",
+    "Окремий підрозділ батальйону/дивізіону",
+]
+
+OLD_STAFF_HEADERS = [
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Узагальнена кількість за військову частину",
+    "",
+    "",
+    "№ з/п",
+    "Номенклатурний код",
+    "Найменування згідно номенклатору",
+    "Кількість",
+    "Окремий підрозділ бригади",
+    "Окремий підрозділ батальйону/дивізіону",
 ]
 
 DUPLICATE_FIELDS = {
@@ -323,8 +350,7 @@ class OblikWorkbook:
         ws_staff = wb.create_sheet(SHEET_STAFF)
         for col, header in enumerate(STAFF_HEADERS, 1):
             ws_staff.cell(1, col, header)
-        self._style_header(ws_staff, 1, len(STAFF_HEADERS))
-        ws_staff.freeze_panes = "A2"
+        self._style_staff_sheet(ws_staff)
 
         ws_summary = wb.create_sheet(SHEET_SUMMARY)
         for col, header in enumerate(SUMMARY_OUTPUT_HEADERS, 1):
@@ -350,6 +376,56 @@ class OblikWorkbook:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(MAIN_HEADERS))}1"
         for idx in range(1, len(MAIN_HEADERS) + 1):
             ws.column_dimensions[get_column_letter(idx)].width = 18
+
+    def _style_staff_sheet(self, ws) -> None:
+        """Оформлення двох окремих таблиць на аркуші «Штат»."""
+        fill = PatternFill("solid", fgColor="1F4E78")
+        side = Side(style="thin", color="A0A0A0")
+
+        # Таблиця 1: A:E. Таблиця 2: G:M. F — роздільник.
+        for start_col, end_col in ((1, 5), (7, 13)):
+            for col in range(start_col, end_col + 1):
+                cell = ws.cell(1, col)
+                cell.fill = fill
+                cell.font = Font(color="FFFFFF", bold=True)
+                cell.alignment = Alignment(
+                    horizontal="center",
+                    vertical="center",
+                    wrap_text=True,
+                )
+                cell.border = Border(
+                    left=side,
+                    right=side,
+                    top=side,
+                    bottom=side,
+                )
+
+        separator = ws.cell(1, 6)
+        separator.value = ""
+        separator.fill = PatternFill(fill_type=None)
+        separator.border = Border()
+        separator.font = Font(color="000000", bold=False)
+
+        widths = {
+            "A": 9,
+            "B": 22,
+            "C": 42,
+            "D": 12,
+            "E": 24,
+            "F": 3,
+            "G": 9,
+            "H": 22,
+            "I": 42,
+            "J": 12,
+            "K": 14,
+            "L": 23,
+            "M": 30,
+        }
+        for column, width in widths.items():
+            ws.column_dimensions[column].width = width
+
+        ws.row_dimensions[1].height = 72
+        ws.freeze_panes = "A2"
 
     def _style_header(self, ws, row: int, count: int) -> None:
         fill = PatternFill("solid", fgColor="1F4E78")
@@ -391,6 +467,8 @@ class OblikWorkbook:
             # Після міграції/відкриття приводимо розрахункові колонки до правил.
             self._restore_row_formulas(ws)
 
+        if self._ensure_staff_sheet_schema(self.wb[SHEET_STAFF]):
+            migrated = True
         if self._ensure_change_sheet_schema(self.wb[SHEET_CHANGES]):
             migrated = True
         if self._ensure_transaction_ids():
@@ -417,6 +495,71 @@ class OblikWorkbook:
             changed = True
         if changed:
             ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}1"
+        return changed
+
+    def _ensure_staff_sheet_schema(self, ws) -> bool:
+        """Приводить аркуш «Штат» до двох таблиць A:E та G:M."""
+        headers = [
+            str(ws.cell(1, col).value or "")
+            for col in range(1, max(ws.max_column, len(STAFF_HEADERS)) + 1)
+        ]
+
+        # Правильна структура вже є — лише нормалізуємо оформлення.
+        if headers[:len(STAFF_HEADERS)] == STAFF_HEADERS:
+            self._style_staff_sheet(ws)
+            return False
+
+        # Міграція попереднього шаблону Oblik 0.2.x:
+        # A:D = агрегована таблиця, G:L = деталізація.
+        if headers[:len(OLD_STAFF_HEADERS)] == OLD_STAFF_HEADERS:
+            max_row = ws.max_row
+            old_rows = []
+            for row in range(2, max_row + 1):
+                old_rows.append([
+                    ws.cell(row, col).value
+                    for col in range(1, len(OLD_STAFF_HEADERS) + 1)
+                ])
+
+            # Очищаємо стару ширину таблиці і записуємо правильну схему.
+            for row in range(1, max_row + 1):
+                for col in range(1, max(len(STAFF_HEADERS), len(OLD_STAFF_HEADERS)) + 1):
+                    ws.cell(row, col).value = None
+
+            for col, header in enumerate(STAFF_HEADERS, 1):
+                ws.cell(1, col, header)
+
+            for row_index, old in enumerate(old_rows, start=2):
+                # Таблиця 1: A,B,C -> A,B,C; D(кількість) -> E.
+                ws.cell(row_index, 1, old[0])
+                ws.cell(row_index, 2, old[1])
+                ws.cell(row_index, 3, old[2])
+                ws.cell(row_index, 4, None)       # Од. виміру
+                ws.cell(row_index, 5, old[3])     # Узагальнена кількість
+
+                # Таблиця 2: G,H,I -> G,H,I; J(кількість) -> K;
+                # K,L -> L,M. J стає «Од. виміру».
+                ws.cell(row_index, 7, old[6])
+                ws.cell(row_index, 8, old[7])
+                ws.cell(row_index, 9, old[8])
+                ws.cell(row_index, 10, None)      # Од. виміру
+                ws.cell(row_index, 11, old[9])    # Кількість
+                ws.cell(row_index, 12, old[10])   # Підрозділ бригади
+                ws.cell(row_index, 13, old[11])   # Батальйон/дивізіон
+
+            self._style_staff_sheet(ws)
+            return True
+
+        # Не переписуємо довільний користувацький «Штат». Якщо перші
+        # колонки відповідають правильній структурі, просто доповнюємо шапку.
+        changed = False
+        for col, header in enumerate(STAFF_HEADERS, 1):
+            if str(ws.cell(1, col).value or "") != header:
+                # Автоматично виправляємо тільки порожні службові заголовки.
+                if is_blank(ws.cell(1, col).value):
+                    ws.cell(1, col, header)
+                    changed = True
+        if changed:
+            self._style_staff_sheet(ws)
         return changed
 
     def _ensure_change_sheet_schema(self, ws) -> bool:
@@ -797,7 +940,8 @@ class OblikWorkbook:
         for row in range(2, ws.max_row + 1):
             code_raw = ws.cell(row, 2).value
             name_raw = ws.cell(row, 3).value
-            quantity = numeric_value(ws.cell(row, 4).value)
+            unit = display_value(ws.cell(row, 4).value).strip()
+            quantity = numeric_value(ws.cell(row, 5).value)
             if is_blank(code_raw) and is_blank(name_raw) and quantity is None:
                 continue
 
@@ -807,6 +951,7 @@ class OblikWorkbook:
                 "key": key,
                 "code": display_value(code_raw).strip(),
                 "name": display_value(name_raw).strip(),
+                "unit": unit,
                 "quantity": float(quantity or 0.0),
                 "excel_row": row,
             }
@@ -2311,12 +2456,140 @@ class FletOblikApp:
         self.row_action_controls[excel_row] = host
         return host
 
+    def _render_staff(self) -> None:
+        """Показує дві таблиці аркуша «Штат» без втрати повторюваних заголовків."""
+        self.table_host.controls.clear()
+        self.sheet_title.value = SHEET_STAFF
+        self.file_label.value = (
+            str(self.model.path) if self.model.path else "Файл не відкрито"
+        )
+
+        self.search.visible = True
+        self.btn_add.visible = False
+        self.btn_edit.visible = False
+        self.btn_delete.visible = False
+        self.action_menu.visible = False
+        self.summary_group_dropdown.visible = False
+        self.btn_summary_refresh.visible = False
+
+        if self.model.wb is None or SHEET_STAFF not in self.model.wb.sheetnames:
+            self.table_host.controls.append(
+                ft.Container(
+                    padding=30,
+                    content=ft.Text(
+                        "Відкрийте Excel-файл або створіть нову книгу.",
+                        color=ft.Colors.BLUE_GREY_600,
+                    ),
+                )
+            )
+            self.page.update()
+            return
+
+        ws = self.model.wb[SHEET_STAFF]
+        query = norm(self.search.value)
+        rows = []
+
+        widths = {
+            1: 70,   2: 180, 3: 360, 4: 105, 5: 200,
+            6: 24,
+            7: 70,   8: 180, 9: 360, 10: 105, 11: 120, 12: 210, 13: 250,
+        }
+
+        for row_no in range(2, ws.max_row + 1):
+            values = [ws.cell(row_no, col).value for col in range(1, 14)]
+            if not any(value not in (None, "") for value in values):
+                continue
+            if query and not any(query in norm(display_value(value)) for value in values):
+                continue
+
+            cells = []
+            for col, value in enumerate(values, start=1):
+                if col == 6:
+                    cells.append(
+                        ft.DataCell(
+                            ft.Container(width=widths[col])
+                        )
+                    )
+                    continue
+                cells.append(
+                    ft.DataCell(
+                        ft.Container(
+                            width=widths[col],
+                            padding=4,
+                            content=ft.Text(
+                                display_value(value),
+                                size=12,
+                                max_lines=4,
+                            ),
+                        )
+                    )
+                )
+            rows.append(ft.DataRow(cells=cells))
+
+        columns = []
+        for col, header in enumerate(STAFF_HEADERS, start=1):
+            if col == 6:
+                columns.append(
+                    ft.DataColumn(label=ft.Container(width=widths[col]))
+                )
+                continue
+            columns.append(
+                ft.DataColumn(
+                    label=ft.Container(
+                        width=widths[col],
+                        padding=4,
+                        content=ft.Text(
+                            header,
+                            size=11,
+                            weight=ft.FontWeight.BOLD,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                    )
+                )
+            )
+
+        table = fdt.DataTable2(
+            columns=columns,
+            rows=rows,
+            expand=True,
+            heading_row_color=ft.Colors.BLUE_50,
+            fixed_top_rows=1,
+            visible_horizontal_scroll_bar=True,
+            visible_vertical_scroll_bar=True,
+            min_width=2300,
+            heading_row_height=76,
+            data_row_height=70,
+            column_spacing=4,
+            horizontal_margin=4,
+        )
+
+        self.table_host.controls.extend([
+            ft.Container(
+                padding=ft.Padding.only(bottom=8),
+                content=ft.Text(
+                    "Ліва таблиця — узагальнений штат військової частини. "
+                    "Права — деталізація штатної потреби по підрозділах.",
+                    size=12,
+                    color=ft.Colors.BLUE_GREY_600,
+                ),
+            ),
+            ft.Container(expand=True, content=table),
+        ])
+
+        self.status.value = (
+            f"{SHEET_STAFF}: {len(rows)} рядків | {self.model.path or ''}"
+        )
+        self.page.update()
+
     def _refresh_table(self):
         if self.current_sheet == SETTINGS_VIEW:
             self._render_settings()
             return
         if self.current_sheet == SHEET_SUMMARY:
             self._render_summary(sync_sheet=True)
+            return
+        if self.current_sheet == SHEET_STAFF:
+            self._render_staff()
             return
 
         self.search.visible = True
