@@ -212,6 +212,40 @@ def display_value(value: Any) -> str:
     return str(value)
 
 
+def staff_ui_numbered_values(
+    values: list[Any],
+    left_index: int,
+    right_index: int,
+) -> tuple[list[Any], int, int, bool, bool]:
+    """Підміняє Excel-формули № з/п на числа для двох таблиць «Штат»."""
+    result = list(values)
+    while len(result) < 13:
+        result.append(None)
+
+    left_has_data = any(
+        result[col - 1] not in (None, "")
+        for col in range(2, 6)
+    )
+    right_has_data = any(
+        result[col - 1] not in (None, "")
+        for col in range(8, 14)
+    )
+
+    if left_has_data:
+        left_index += 1
+        result[0] = left_index
+    else:
+        result[0] = None
+
+    if right_has_data:
+        right_index += 1
+        result[6] = right_index
+    else:
+        result[6] = None
+
+    return result, left_index, right_index, left_has_data, right_has_data
+
+
 def numeric_value(value: Any) -> Optional[float]:
     """Перетворює число/текст на float для розрахункових колонок."""
     if is_blank(value):
@@ -2502,28 +2536,15 @@ class FletOblikApp:
 
             # У програмі не показуємо Excel-формули типу =ROW()-1.
             # Обидві таблиці мають власну незалежну послідовну нумерацію.
-            left_has_data = any(
-                values[col - 1] not in (None, "")
-                for col in range(2, 6)
-            )
-            right_has_data = any(
-                values[col - 1] not in (None, "")
-                for col in range(8, 14)
-            )
+            (
+                values,
+                left_index,
+                right_index,
+                left_has_data,
+                right_has_data,
+            ) = staff_ui_numbered_values(values, left_index, right_index)
             if not left_has_data and not right_has_data:
                 continue
-
-            if left_has_data:
-                left_index += 1
-                values[0] = left_index
-            else:
-                values[0] = None
-
-            if right_has_data:
-                right_index += 1
-                values[6] = right_index
-            else:
-                values[6] = None
 
             if query and not any(query in norm(display_value(value)) for value in values):
                 continue
