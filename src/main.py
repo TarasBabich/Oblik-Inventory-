@@ -39,6 +39,17 @@ import flet_datatable2 as fdt
 APP_TITLE = "Oblik Inventory"
 APP_VERSION = "0.2.17"
 
+# Єдина палітра робочого інтерфейсу: стриманий темний навігаційний блок
+# та світла поверхня для великих облікових таблиць.
+UI_FOREST = "#192F27"
+UI_FOREST_ACTIVE = "#355746"
+UI_ACCENT = "#DCE9B7"
+UI_CANVAS = "#F1F3EE"
+UI_HEADER = "#EEF3EA"
+UI_TEXT = "#20372D"
+UI_MUTED = "#708076"
+UI_BORDER = "#DDE5D9"
+
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
 SHEET_CURRENT = "Поточний стан"
@@ -1471,7 +1482,7 @@ class FletOblikApp:
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
-        self.page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE)
+        self.page.theme = ft.Theme(color_scheme_seed=UI_FOREST_ACTIVE)
         self.page.padding = 0
         self.page.spacing = 0
         self.page.window.width = 1500
@@ -1482,15 +1493,19 @@ class FletOblikApp:
         self.status = ft.Text(
             "Відкрийте існуючу книгу або створіть нову",
             size=12,
-            color=ft.Colors.BLUE_GREY_700,
+            color=UI_MUTED,
         )
         self.file_label = ft.Text("Файл не відкрито", weight=ft.FontWeight.W_600)
         self.search = ft.TextField(
-            hint_text="Пошук у відкритій таблиці…",
+            hint_text="Пошук за назвою, кодом або номером…",
             prefix_icon=ft.Icons.SEARCH,
             on_change=self._search_changed,
             expand=True,
+            border_radius=10,
         )
+        # Картки показують кількість записів за джерелами без припущень про
+        # кількість одиниць майна чи стан: це різні облікові показники.
+        self.metric_values: dict[str, ft.Text] = {}
         # Таблиця сама керує вертикальною/горизонтальною прокруткою через DataTable2.
         self.table_host = ft.Column(expand=True)
 
@@ -1536,9 +1551,9 @@ class FletOblikApp:
             menu_position=ft.PopupMenuPosition.UNDER,
             content=ft.Container(
                 padding=ft.Padding.symmetric(horizontal=14, vertical=9),
-                border=ft.Border.all(1, ft.Colors.BLUE_200),
+                border=ft.Border.all(1, UI_BORDER),
                 border_radius=22,
-                bgcolor=ft.Colors.BLUE_50,
+                bgcolor=UI_HEADER,
                 content=ft.Row(
                     tight=True,
                     spacing=6,
@@ -1600,19 +1615,19 @@ class FletOblikApp:
 
     def _build_page(self):
         toolbar = ft.Container(
-            bgcolor=ft.Colors.BLUE_GREY_900,
-            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+            bgcolor=ft.Colors.WHITE,
+            padding=ft.Padding.symmetric(horizontal=26, vertical=12),
             content=ft.Row(
                 controls=[
                     ft.Text(
-                        "OBLIK",
-                        size=20,
+                        "Облік майна",
+                        size=17,
                         weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.WHITE,
+                        color=UI_TEXT,
                     ),
-                    ft.VerticalDivider(color=ft.Colors.WHITE_24),
+                    ft.Container(expand=True),
                     ft.Button(
-                        content="Відкрити Excel",
+                        content="Відкрити книгу",
                         icon=ft.Icons.FOLDER_OPEN,
                         on_click=self._open_file,
                     ),
@@ -1626,59 +1641,128 @@ class FletOblikApp:
                         icon=ft.Icons.SAVE,
                         on_click=self._save_file,
                     ),
-                    ft.Button(
-                        content="Зберегти як",
-                        icon=ft.Icons.SAVE_AS,
-                        on_click=self._save_as,
+                    ft.PopupMenuButton(
+                        icon=ft.Icons.MORE_HORIZ,
+                        tooltip="Додаткові команди",
+                        items=[
+                            ft.PopupMenuItem(content="Зберегти як", on_click=self._save_as),
+                            ft.PopupMenuItem(content="Оновити поточний стан", on_click=self._rebuild_current),
+                        ],
                     ),
-                    ft.Button(
-                        content="Оновити поточний стан",
-                        icon=ft.Icons.REFRESH,
-                        on_click=self._rebuild_current,
-                    ),
-                    ft.Container(expand=True),
-                    ft.Text(f"v{APP_VERSION}", color=ft.Colors.WHITE_70),
                 ],
             ),
         )
 
-        nav_controls = [
+        nav_controls: list[ft.Control] = [
+            ft.Row(
+                controls=[
+                    ft.Container(
+                        width=40,
+                        height=40,
+                        border_radius=11,
+                        bgcolor=UI_ACCENT,
+                        alignment=ft.Alignment.CENTER,
+                        content=ft.Text("O", size=25, weight=ft.FontWeight.BOLD, color=UI_FOREST),
+                    ),
+                    ft.Column(
+                        controls=[
+                            ft.Text("OBLIK", color=ft.Colors.WHITE, size=21, weight=ft.FontWeight.BOLD),
+                            ft.Text("ОБЛІК МАЙНА", color=UI_ACCENT, size=10),
+                        ],
+                        spacing=0,
+                    ),
+                ],
+                spacing=11,
+            ),
+            ft.Container(height=19),
             ft.Text(
-                "РОЗДІЛИ",
+                "РОБОЧИЙ ПРОСТІР",
                 size=11,
                 weight=ft.FontWeight.BOLD,
-                color=ft.Colors.BLUE_GREY_400,
+                color="#AABFAF",
             )
         ]
+        nav_icons = {
+            SHEET_MOVEMENT: ft.Icons.SWAP_HORIZ,
+            SHEET_CURRENT: ft.Icons.INVENTORY_2_OUTLINED,
+            SHEET_STAFF: ft.Icons.TABLE_ROWS_OUTLINED,
+            SHEET_SUMMARY: ft.Icons.BAR_CHART,
+            SHEET_CHANGES: ft.Icons.HISTORY,
+        }
         for sheet in REQUIRED_SHEETS:
             button = ft.Button(
                 content=sheet,
+                icon=nav_icons[sheet],
                 data=sheet,
                 on_click=self._select_sheet,
-                width=205,
+                width=220,
+                color=ft.Colors.WHITE,
+                bgcolor=UI_FOREST_ACTIVE if sheet == self.current_sheet else UI_FOREST,
             )
             self.sheet_buttons[sheet] = button
             nav_controls.append(button)
 
         nav_controls.extend([
-            ft.Divider(),
+            ft.Divider(color="#405B4B"),
             ft.Button(
                 content="Налаштування",
                 icon=ft.Icons.SETTINGS,
                 data=SETTINGS_VIEW,
                 on_click=self._select_sheet,
-                width=205,
+                width=220,
+                color=ft.Colors.WHITE,
+                bgcolor=UI_FOREST,
             ),
         ])
 
         sidebar = ft.Container(
-            width=230,
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            padding=16,
+            width=254,
+            bgcolor=UI_FOREST,
+            padding=ft.Padding.symmetric(horizontal=16, vertical=25),
             content=ft.Column(
-                controls=nav_controls,
+                controls=[
+                    *nav_controls,
+                    ft.Container(expand=True),
+                    ft.Text(f"OBLIK  ·  v{APP_VERSION}", size=11, color="#9FB5A5"),
+                ],
                 spacing=8,
             ),
+        )
+
+        def metric(label: str, icon: str) -> ft.Container:
+            value = ft.Text("—", size=24, weight=ft.FontWeight.BOLD, color=UI_TEXT)
+            self.metric_values[label] = value
+            return ft.Container(
+                expand=True,
+                bgcolor=ft.Colors.WHITE,
+                padding=ft.Padding.symmetric(horizontal=17, vertical=14),
+                border=ft.Border.all(1, UI_BORDER),
+                border_radius=14,
+                content=ft.Row(
+                    controls=[
+                        ft.Container(
+                            width=40, height=40, border_radius=10,
+                            bgcolor=UI_HEADER,
+                            alignment=ft.Alignment.CENTER,
+                            content=ft.Icon(icon, color=UI_FOREST_ACTIVE, size=21),
+                        ),
+                        ft.Column(
+                            controls=[ft.Text(label, size=11, color=UI_MUTED), value],
+                            spacing=3,
+                        ),
+                    ],
+                    spacing=12,
+                ),
+            )
+
+        metrics = ft.Row(
+            controls=[
+                metric("Операцій", ft.Icons.SWAP_HORIZ),
+                metric("Поточний стан", ft.Icons.INVENTORY_2_OUTLINED),
+                metric("Позицій у штаті", ft.Icons.TABLE_ROWS_OUTLINED),
+                metric("Позицій у зведенні", ft.Icons.BAR_CHART),
+            ],
+            spacing=10,
         )
 
         action_bar = ft.Row(
@@ -1693,9 +1777,11 @@ class FletOblikApp:
 
         main_panel = ft.Container(
             expand=True,
-            padding=16,
+            bgcolor=UI_CANVAS,
+            padding=ft.Padding.symmetric(horizontal=25, vertical=20),
             content=ft.Column(
                 expand=True,
+                spacing=13,
                 controls=[
                     ft.Row(
                         controls=[
@@ -1706,6 +1792,7 @@ class FletOblikApp:
                                         key="sheet_title",
                                         size=23,
                                         weight=ft.FontWeight.BOLD,
+                                        color=UI_TEXT,
                                     ),
                                     self.file_label,
                                 ],
@@ -1714,10 +1801,16 @@ class FletOblikApp:
                             ),
                         ]
                     ),
+                    metrics,
                     action_bar,
-                    ft.Divider(height=1),
-                    self.table_host,
-                    ft.Divider(height=1),
+                    ft.Container(
+                        expand=True,
+                        bgcolor=ft.Colors.WHITE,
+                        border=ft.Border.all(1, UI_BORDER),
+                        border_radius=14,
+                        padding=10,
+                        content=self.table_host,
+                    ),
                     self.status,
                 ],
             ),
@@ -1727,7 +1820,7 @@ class FletOblikApp:
         body = ft.Row(
             expand=True,
             spacing=0,
-            controls=[sidebar, ft.VerticalDivider(width=1), main_panel],
+            controls=[sidebar, main_panel],
         )
         self.page.add(
             ft.Column(
@@ -1737,6 +1830,35 @@ class FletOblikApp:
             )
         )
         self._refresh_table()
+
+    def _update_dashboard_metrics(self) -> None:
+        """Рахує рядки джерел, не підміняючи їх кількістю одиниць майна."""
+        names = {
+            "Операцій": SHEET_MOVEMENT,
+            "Поточний стан": SHEET_CURRENT,
+            "Позицій у штаті": SHEET_STAFF,
+            "Позицій у зведенні": SHEET_SUMMARY,
+        }
+        for label, sheet in names.items():
+            if self.model.wb is None or sheet not in self.model.wb.sheetnames:
+                self.metric_values[label].value = "—"
+            elif sheet == SHEET_STAFF:
+                # У «Штаті» рахуються позиції першої таблиці A:E.
+                ws = self.model.wb[sheet]
+                self.metric_values[label].value = str(sum(
+                    1 for row in ws.iter_rows(min_row=2, min_col=2, max_col=3)
+                    if any(cell.value is not None for cell in row)
+                ))
+            else:
+                ws = self.model.wb[sheet]
+                self.metric_values[label].value = str(sum(
+                    1 for row in ws.iter_rows(min_row=2, max_col=2)
+                    if any(cell.value is not None for cell in row)
+                ))
+
+        # Активний розділ залишається помітним і після зміни аркуша.
+        for sheet, button in self.sheet_buttons.items():
+            button.bgcolor = UI_FOREST_ACTIVE if sheet == self.current_sheet else UI_FOREST
 
     def _autoload_default_book(self):
         base = (
@@ -2286,6 +2408,7 @@ class FletOblikApp:
             if sync_sheet
             else self.model.build_summary_dataframe(group_header)
         )
+        self._update_dashboard_metrics()
 
         query = norm(self.search.value)
         if query and not summary.empty:
@@ -2529,24 +2652,24 @@ class FletOblikApp:
             on_open=lambda e, row=excel_row: self._activate_row_action(row, e),
             content=ft.Container(
                 padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-                border=ft.Border.all(1, ft.Colors.BLUE_200),
+                border=ft.Border.all(1, UI_BORDER),
                 border_radius=18,
-                bgcolor=ft.Colors.BLUE_50,
+                bgcolor=UI_HEADER,
                 content=ft.Row(
                     tight=True,
                     spacing=4,
                     controls=[
-                        ft.Icon(ft.Icons.BOLT, size=16, color=ft.Colors.BLUE_700),
+                        ft.Icon(ft.Icons.MORE_HORIZ, size=16, color=UI_FOREST_ACTIVE),
                         ft.Text(
                             "Дія",
                             size=12,
                             weight=ft.FontWeight.W_600,
-                            color=ft.Colors.BLUE_800,
+                            color=UI_FOREST_ACTIVE,
                         ),
                         ft.Icon(
                             ft.Icons.ARROW_DROP_DOWN,
                             size=18,
-                            color=ft.Colors.BLUE_700,
+                            color=UI_FOREST_ACTIVE,
                         ),
                     ],
                 ),
@@ -3130,6 +3253,7 @@ class FletOblikApp:
         self.page.update()
 
     def _refresh_table(self):
+        self._update_dashboard_metrics()
         if self.current_sheet == SETTINGS_VIEW:
             self._render_settings()
             return
@@ -3302,11 +3426,11 @@ class FletOblikApp:
             rows=data_rows,
             expand=True,
             show_checkbox_column=False,
-            heading_row_color=ft.Colors.BLUE_50,
+            heading_row_color=UI_HEADER,
             fixed_top_rows=1,
             fixed_left_columns=fixed_left,
-            fixed_columns_color=ft.Colors.BLUE_GREY_50,
-            fixed_corner_color=ft.Colors.BLUE_100,
+            fixed_columns_color=UI_HEADER,
+            fixed_corner_color=UI_HEADER,
             visible_horizontal_scroll_bar=True,
             visible_vertical_scroll_bar=True,
             min_width=max(1100, len(table_headers) * 181),
