@@ -78,9 +78,21 @@ def main():
         on_open=lambda e: None,
         items=[ft.PopupMenuItem(content="Дія")],
     )
+    hidden_action_host = ft.Container(
+        visible=True,
+        opacity=0.0,
+        content=ft.PopupMenuButton(
+            disabled=True,
+            items=[ft.PopupMenuItem(content="Дія")],
+        ),
+    )
+    cell = ft.DataCell(hidden_action_host)
     assert hover_container.on_hover is not None
     assert row2.on_tap is not None
     assert popup.on_open is not None
+    assert cell.content.visible is True
+    assert cell.content.opacity == 0.0
+    assert cell.content.content.disabled is True
 
     summary_dropdown = ft.Dropdown(
         value="Узагальнена назва",
