@@ -212,6 +212,29 @@ def display_value(value: Any) -> str:
     return str(value)
 
 
+def estimate_staff_row_height(values: list[Any]) -> int:
+    """Оцінює висоту рядка «Штат», щоб довгі назви були видимі повністю."""
+
+    # Найдовші тексти знаходяться у двох колонках «Найменування згідно номенклатору».
+    # Для ширини близько 360 px у середньому поміщається приблизно 42 символи в рядок.
+    name_columns = (2, 8)  # нульові індекси C та I
+    max_lines = 1
+
+    for index in name_columns:
+        text = display_value(values[index] if index < len(values) else "").strip()
+        if not text:
+            continue
+
+        # Враховуємо як явні переноси рядка, так і автоматичне перенесення довгого тексту.
+        visual_lines = 0
+        for physical_line in text.splitlines() or [""]:
+            visual_lines += max(1, (len(physical_line) + 41) // 42)
+        max_lines = max(max_lines, visual_lines)
+
+    # 22 px на рядок тексту + внутрішні відступи. Мінімум 70 px.
+    return max(70, max_lines * 22 + 18)
+
+
 def staff_ui_numbered_values(
     values: list[Any],
     left_index: int,
@@ -2326,7 +2349,7 @@ class FletOblikApp:
             visible_vertical_scroll_bar=True,
             min_width=1900,
             heading_row_height=68,
-            data_row_height=70,
+            data_row_height=max_row_height,
             column_spacing=8,
             horizontal_margin=8,
         )
@@ -2544,6 +2567,7 @@ class FletOblikApp:
 
         left_index = 0
         right_index = 0
+        max_row_height = 70
         for row_no in range(2, ws.max_row + 1):
             values = [ws.cell(row_no, col).value for col in range(1, 14)]
 
@@ -2562,6 +2586,10 @@ class FletOblikApp:
             if query and not any(query in norm(display_value(value)) for value in values):
                 continue
 
+            # Висота всієї таблиці підлаштовується під найдовшу назву,
+            # щоб жодне найменування не обрізалось вертикально.
+            max_row_height = max(max_row_height, estimate_staff_row_height(values))
+
             cells = []
             for col, value in enumerate(values, start=1):
                 if col == 6:
@@ -2579,7 +2607,10 @@ class FletOblikApp:
                             content=ft.Text(
                                 display_value(value),
                                 size=12,
-                                max_lines=4,
+                                # Назви в C та I показуємо повністю без ліміту рядків.
+                                # Для інших колонок теж не обрізаємо текст штучно.
+                                max_lines=None,
+                                no_wrap=False,
                             ),
                         )
                     )
