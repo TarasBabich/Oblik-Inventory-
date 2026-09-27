@@ -2569,6 +2569,209 @@ class FletOblikApp:
         self.row_action_controls[excel_row] = host
         return host
 
+    def _ensure_staff_layout_state(self, ws) -> None:
+        """Завантажує ширини колонок і ручні висоти рядків із відкритого Excel."""
+
+        # Поєднуємо шлях та id Workbook, щоб повторне відкриття тієї ж книги
+        # у цій сесії теж перечитало фактичні розміри з диска.
+        source_key = f"{self.model.path or ''}|{id(self.model.wb)}"
+        if source_key == self.staff_layout_source_key:
+            return
+
+        # Для нової книги починаємо з базових ширин.
+        self.staff_column_widths = dict(STAFF_DEFAULT_COLUMN_WIDTHS)
+
+        # Якщо в Excel задана ширина колонки, використовуємо її як стартову.
+        # Орієнтовно 1 Excel-unit відповідає 8 px у нашій Flet-сітці.
+        for col in range(1, 14):
+            excel_width = ws.column_dimensions[get_column_letter(col)].width
+            if excel_width is None:
+                continue
+            pixel_width = float(excel_width) * 8.0
+            self.staff_column_widths[col] = max(
+                STAFF_MIN_COLUMN_WIDTH if col != 6 else 12,
+                min(STAFF_MAX_COLUMN_WIDTH, pixel_width),
+            )
+
+        # Ручні висоти Excel-рядків теж відновлюємо.
+        # 1 point ≈ 1.333 px, тому ділимо на 0.75.
+        self.staff_row_heights = {}
+        for row_no in range(2, ws.max_row + 1):
+            excel_height = ws.row_dimensions[row_no].height
+            if excel_height is None:
+                continue
+            pixel_height = float(excel_height) / 0.75
+            self.staff_row_heights[row_no] = max(
+                STAFF_MIN_ROW_HEIGHT,
+                min(STAFF_MAX_ROW_HEIGHT, pixel_height),
+            )
+
+        # Скидаємо посилання на старі UI-контроли — новий render створить свої.
+        self.staff_column_controls = defaultdict(list)
+        self.staff_row_controls = defaultdict(list)
+        self.staff_grid_control = None
+        self.staff_layout_source_key = source_key
+
+    @staticmethod
+    def _drag_delta(e, axis: str) -> float:
+        """Безпечно витягує delta з Flet DragUpdateEvent для resize."""
+
+        # У Flet 1.x основне поле — local_delta.x / local_delta.y.
+        local_delta = getattr(e, "local_delta", None)
+        if local_delta is not None:
+            value = getattr(local_delta, axis, 0.0)
+            try:
+                return float(value or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        # Резерв для сумісності зі старішими подіями Flet.
+        legacy_name = "delta_x" if axis == "x" else "delta_y"
+        try:
+            return float(getattr(e, legacy_name, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _resize_staff_column(self, col: int, e=None) -> None:
+        """Змінює ширину однієї колонки перетягуванням її правої межі."""
+
+        # Службовий F-роздільник не є даною колонкою, тому його не resize-имо.
+        if col == 6 or e is None:
+            return
+
+        delta = self._drag_delta(e, "x")
+        if not delta:
+            return
+
+        current = float(
+            self.staff_column_widths.get(col, STAFF_DEFAULT_COLUMN_WIDTHS[col])
+        )
+        new_width = max(
+            STAFF_MIN_COLUMN_WIDTH,
+            min(STAFF_MAX_COLUMN_WIDTH, current + delta),
+        )
+        self.staff_column_widths[col] = new_width
+
+        # Одна ширина застосовується одночасно до шапки і всіх видимих рядків.
+        for control in self.staff_column_controls.get(col, []):
+            if hasattr(control, "width"):
+                control.width = new_width
+
+        # Загальна ширина сітки теж змінюється, щоб нижній scrollbar знав
+        # реальний горизонтальний розмір після resize.
+        if self.staff_grid_control is not None:
+            self.staff_grid_control.width = sum(self.staff_column_widths.values())
+
+        # Записуємо ширину у Workbook. Після кнопки «Зберегти» вона
+        # збережеться у файлі й відновиться при наступному відкритті.
+        if self.model.wb is not None:
+            ws = self.model.wb[SHEET_STAFF]
+            ws.column_dimensions[get_column_letter(col)].width = round(
+                new_width / 8.0,
+                2,
+            )
+            self.model.dirty = True
+
+        # Оновлюємо екран одним циклом, щоб перетягування було плавним.
+        self.page.update()
+
+    def _reset_staff_column_width(self, col: int, e=None) -> None:
+        """Подвійний клік по межі повертає колонці базову ширину."""
+
+        if col == 6:
+            return
+
+        new_width = float(STAFF_DEFAULT_COLUMN_WIDTHS[col])
+        self.staff_column_widths[col] = new_width
+
+        for control in self.staff_column_controls.get(col, []):
+            if hasattr(control, "width"):
+                control.width = new_width
+
+        if self.staff_grid_control is not None:
+            self.staff_grid_control.width = sum(self.staff_column_widths.values())
+
+        if self.model.wb is not None:
+            ws = self.model.wb[SHEET_STAFF]
+            ws.column_dimensions[get_column_letter(col)].width = round(
+                new_width / 8.0,
+                2,
+            )
+            self.model.dirty = True
+
+        self.page.update()
+
+    def _resize_staff_row(self, row_no: int, e=None) -> None:
+        """Змінює висоту конкретного Excel-рядка перетягуванням нижньої межі."""
+
+        if e is None:
+            return
+
+        delta = self._drag_delta(e, "y")
+        if not delta:
+            return
+
+        # Якщо рядок ще не змінювали вручну, беремо його поточну UI-висоту.
+        controls = self.staff_row_controls.get(row_no, [])
+        current = self.staff_row_heights.get(row_no)
+        if current is None and controls:
+            current = float(getattr(controls[0], "height", 70) or 70)
+        current = float(current or 70)
+
+        new_height = max(
+            STAFF_MIN_ROW_HEIGHT,
+            min(STAFF_MAX_ROW_HEIGHT, current + delta),
+        )
+        self.staff_row_heights[row_no] = new_height
+
+        # Усі комірки одного рядка отримують однакову висоту,
+        # тому ліва і права штатні таблиці залишаються вирівняними.
+        for control in controls:
+            if hasattr(control, "height"):
+                control.height = new_height
+
+        # Зберігаємо висоту в одиницях Excel (points).
+        if self.model.wb is not None:
+            ws = self.model.wb[SHEET_STAFF]
+            ws.row_dimensions[row_no].height = round(new_height * 0.75, 2)
+            self.model.dirty = True
+
+        self.page.update()
+
+    def _reset_staff_row_height(
+        self,
+        row_no: int,
+        auto_height: float,
+        e=None,
+    ) -> None:
+        """Подвійний клік по межі рядка повертає автоматичну висоту."""
+
+        self.staff_row_heights.pop(row_no, None)
+        new_height = max(
+            STAFF_MIN_ROW_HEIGHT,
+            min(STAFF_MAX_ROW_HEIGHT, float(auto_height)),
+        )
+
+        for control in self.staff_row_controls.get(row_no, []):
+            if hasattr(control, "height"):
+                control.height = new_height
+
+        if self.model.wb is not None:
+            ws = self.model.wb[SHEET_STAFF]
+            # None повертає Excel-рядок до стандартної/автоматичної висоти.
+            ws.row_dimensions[row_no].height = None
+            self.model.dirty = True
+
+        self.page.update()
+
+    def _staff_resize_finished(self, e=None) -> None:
+        """Після resize нагадує, що новий макет треба зберегти."""
+
+        self._set_status(
+            "Розмір колонок/рядків змінено. Натисніть «Зберегти», "
+            "щоб записати макет у Excel."
+        )
+
     def _render_staff(self) -> None:
         """Показує дві таблиці «Штат» з реальною індивідуальною висотою рядків."""
 
