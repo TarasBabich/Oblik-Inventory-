@@ -8,6 +8,8 @@ from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT
 import pandas as pd
 import flet as ft
 import flet_datatable2 as fdt
+from types import SimpleNamespace
+from src.main import FletOblikApp
 
 
 def record(inv, serial, order, order_date, act, act_date, location, qty=1):
@@ -158,6 +160,11 @@ def main():
     )
     assert column_resize.mouse_cursor == ft.MouseCursor.RESIZE_LEFT_RIGHT
     assert row_resize.mouse_cursor == ft.MouseCursor.RESIZE_UP_DOWN
+    # Flet надсилає загальний рух від початку жесту і окремий приріст.
+    # Ширина/висота повинні змінюватися саме на приріст кожної події.
+    drag = SimpleNamespace(primary_delta=4, local_delta=SimpleNamespace(x=80, y=80))
+    assert FletOblikApp._drag_delta(drag, "x") == 4
+    assert FletOblikApp._drag_delta(drag, "y") == 4
     assert STAFF_MIN_COLUMN_WIDTH < STAFF_MAX_COLUMN_WIDTH
     assert STAFF_MIN_ROW_HEIGHT < STAFF_MAX_ROW_HEIGHT
 
