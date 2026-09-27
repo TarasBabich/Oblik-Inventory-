@@ -231,8 +231,9 @@ def estimate_staff_row_height(values: list[Any]) -> int:
             visual_lines += max(1, (len(physical_line) + 41) // 42)
         max_lines = max(max_lines, visual_lines)
 
-    # 22 px на рядок тексту + внутрішні відступи. Мінімум 70 px.
-    return max(70, max_lines * 22 + 18)
+    # 28 px на рядок тексту + внутрішні відступи. Уже два рядки
+    # збільшують висоту понад базові 70 px, тому нижній рядок не підрізається.
+    return max(70, max_lines * 28 + 18)
 
 
 def staff_ui_numbered_values(
