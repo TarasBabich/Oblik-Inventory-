@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.12"
+APP_VERSION = "0.2.13"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -777,70 +777,116 @@ class OblikWorkbook:
                 rows.append(rnum)
         return DuplicateInfo(best, tuple(rows))
 
-    def _staff_need_lookup(self) -> dict[str, float]:
-        """Штат за номенклатурою з лівої агрегованої частини аркуша «Штат»."""
+    @staticmethod
+    def _nomenclature_key(code: Any, name: Any, fallback: str = "") -> str:
+        normalized_code = norm(code)
+        normalized_name = norm(name)
+        if normalized_code:
+            return "code:" + normalized_code
+        if normalized_name:
+            return "name:" + normalized_name
+        return "row:" + fallback
+
+    def _staff_positions(self) -> dict[str, dict[str, Any]]:
+        """Штатні позиції з лівої агрегованої частини аркуша «Штат»."""
         if self.wb is None or SHEET_STAFF not in self.wb.sheetnames:
             return {}
+
         ws = self.wb[SHEET_STAFF]
-        lookup: dict[str, float] = {}
+        positions: dict[str, dict[str, Any]] = {}
         for row in range(2, ws.max_row + 1):
-            code = norm(ws.cell(row, 2).value)
-            name = norm(ws.cell(row, 3).value)
+            code_raw = ws.cell(row, 2).value
+            name_raw = ws.cell(row, 3).value
             quantity = numeric_value(ws.cell(row, 4).value)
-            if quantity is None:
+            if is_blank(code_raw) and is_blank(name_raw) and quantity is None:
                 continue
-            # Код є основним ключем. Назву також зберігаємо як резервний ключ.
-            if code:
-                lookup["code:" + code] = max(
-                    quantity,
-                    lookup.get("code:" + code, 0.0),
-                )
-            if name:
-                lookup["name:" + name] = max(
-                    quantity,
-                    lookup.get("name:" + name, 0.0),
-                )
-        return lookup
+
+            key = self._nomenclature_key(code_raw, name_raw, str(row))
+            current = positions.get(key)
+            record = {
+                "key": key,
+                "code": display_value(code_raw).strip(),
+                "name": display_value(name_raw).strip(),
+                "quantity": float(quantity or 0.0),
+                "excel_row": row,
+            }
+
+            # Ліва частина «Штат» задумана як агрегований перелік. Якщо через
+            # імпорт одна номенклатура випадково повторена, беремо найбільше
+            # агреговане значення, а не множимо штат повторно.
+            if current is None or record["quantity"] > current["quantity"]:
+                positions[key] = record
+
+        return positions
+
+    def _summary_group_value(
+        self,
+        group_header: str,
+        current_rows: list[dict[str, Any]],
+        staff_position: Optional[dict[str, Any]],
+    ) -> str:
+        """Назва групи. Для штатної позиції без поточного запису не втрачаємо рядок."""
+        for row in current_rows:
+            value = display_value(row.get(group_header)).strip()
+            if value:
+                return value
+
+        staff_name = (
+            display_value(staff_position.get("name")).strip()
+            if staff_position
+            else ""
+        )
+        staff_code = (
+            display_value(staff_position.get("code")).strip()
+            if staff_position
+            else ""
+        )
+
+        if group_header == MAIN_HEADERS[10]:
+            return staff_name or staff_code or "Не вказано"
+
+        # Узагальненої назви та SAP-номера на аркуші «Штат» немає. Якщо
+        # фактичного запису ще немає, залишаємо окрему, зрозумілу позицію,
+        # а не губимо її і не змішуємо з іншими невизначеними номенклатурами.
+        source = staff_name or staff_code
+        if group_header == MAIN_HEADERS[13]:
+            return f"[Штат без SAP] {source}" if source else "Не вказано"
+        return f"[Штат без узагальненої назви] {source}" if source else "Не вказано"
 
     def build_summary_dataframe(self, group_header: str) -> pd.DataFrame:
-        """Агрегує актуальний «Поточний стан» у формат зведеної таблиці."""
+        """Формує «Зведений» шляхом об'єднання «Штат» + «Поточний стан»."""
         if group_header not in SUMMARY_GROUP_FIELDS.values():
             raise ValueError(f"Непідтримуване поле групування: {group_header}")
 
+        staff_positions = self._staff_positions()
         current = self.dataframe(SHEET_CURRENT)
-        if current.empty:
+
+        # Спочатку збираємо фактичні рядки за тією ж номенклатурою, якою
+        # описаний штат: код має пріоритет, назва номенклатури — резерв.
+        current_by_nomenclature: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        if not current.empty:
+            for _, series in current.iterrows():
+                row = series.to_dict()
+                key = self._nomenclature_key(
+                    row.get(MAIN_HEADERS[7]),
+                    row.get(MAIN_HEADERS[10]),
+                    str(int(row.get("_excel_row", 0))),
+                )
+                current_by_nomenclature[key].append(row)
+
+        all_keys = set(staff_positions) | set(current_by_nomenclature)
+        if not all_keys:
             return pd.DataFrame(columns=SUMMARY_OUTPUT_HEADERS)
 
-        staff_lookup = self._staff_need_lookup()
         groups: dict[str, dict[str, Any]] = {}
 
-        for _, row in current.iterrows():
-            raw_group = display_value(row.get(group_header)).strip()
-            group_value = raw_group or "Не вказано"
-
-            quantity = numeric_value(row.get(MAIN_HEADERS[16]))
-            if quantity is None:
-                quantity = 1.0 if (
-                    norm(row.get(MAIN_HEADERS[9]))
-                    or norm(row.get(MAIN_HEADERS[18]))
-                ) else 0.0
-
-            status = norm(row.get(MAIN_HEADERS[23]))
-            operation = norm(row.get(OPERATION_TYPE_HEADER))
-            written_off = (
-                "спис" in status
-                or operation == "списання"
-                or operation == "передача в іншу частину"
-            )
-
-            nomenclature_code = norm(row.get(MAIN_HEADERS[7]))
-            nomenclature_name = norm(row.get(MAIN_HEADERS[10]))
-            nomenclature_key = (
-                "code:" + nomenclature_code
-                if nomenclature_code
-                else "name:" + nomenclature_name
-                if nomenclature_name
-                else "row:" + str(int(row.get("_excel_row", 0)))
+        for nomenclature_key in sorted(all_keys):
+            staff_position = staff_positions.get(nomenclature_key)
+            current_rows = current_by_nomenclature.get(nomenclature_key, [])
+            group_value = self._summary_group_value(
+                group_header,
+                current_rows,
+                staff_position,
             )
 
             bucket = groups.setdefault(
@@ -851,39 +897,69 @@ class OblikWorkbook:
                     "Наявні (справні)": 0.0,
                     "Несправні": 0.0,
                     "БПВ": 0.0,
-                    "_staff_keys": set(),
                     "_notes": [],
                 },
             )
 
-            # «Штат» у зведеній таблиці має єдине джерело істини — аркуш «Штат».
-            # Поле «Штатна потреба» з «Рух майна» / «Поточний стан» тут
-            # принципово не використовується навіть як резервне джерело.
-            if nomenclature_key not in bucket["_staff_keys"]:
-                staff_value = None
-                if nomenclature_code:
-                    staff_value = staff_lookup.get("code:" + nomenclature_code)
-                if staff_value is None and nomenclature_name:
-                    staff_value = staff_lookup.get("name:" + nomenclature_name)
-                if staff_value is not None:
-                    bucket["Штат"] += staff_value
-                bucket["_staff_keys"].add(nomenclature_key)
+            # Штат надходить ВИКЛЮЧНО з аркуша «Штат».
+            if staff_position is not None:
+                bucket["Штат"] += float(staff_position["quantity"])
+            else:
+                label = ""
+                if current_rows:
+                    label = (
+                        display_value(current_rows[0].get(MAIN_HEADERS[10])).strip()
+                        or display_value(current_rows[0].get(MAIN_HEADERS[7])).strip()
+                    )
+                note = (
+                    f"Відсутнє у штаті: {label}"
+                    if label
+                    else "Позиція відсутня у штаті"
+                )
+                if note not in bucket["_notes"]:
+                    bucket["_notes"].append(note)
 
-            if not written_off:
-                bucket["За обліком"] += quantity
+            if staff_position is not None and not current_rows:
+                label = staff_position["name"] or staff_position["code"]
+                note = (
+                    f"Немає в поточному стані: {label}"
+                    if label
+                    else "Немає в поточному стані"
+                )
+                if note not in bucket["_notes"]:
+                    bucket["_notes"].append(note)
 
-                if "передан" in status and "ремонт" in status:
-                    bucket["Несправні"] += quantity
-                elif "несправ" in status:
-                    bucket["Несправні"] += quantity
-                elif "знищ" in status:
-                    bucket["БПВ"] += quantity
-                elif "справ" in status:
-                    bucket["Наявні (справні)"] += quantity
+            for row in current_rows:
+                quantity = numeric_value(row.get(MAIN_HEADERS[16]))
+                if quantity is None:
+                    quantity = 1.0 if (
+                        norm(row.get(MAIN_HEADERS[9]))
+                        or norm(row.get(MAIN_HEADERS[18]))
+                    ) else 0.0
 
-            note = display_value(row.get("Примітка")).strip()
-            if note and note not in bucket["_notes"]:
-                bucket["_notes"].append(note)
+                status = norm(row.get(MAIN_HEADERS[23]))
+                operation = norm(row.get(OPERATION_TYPE_HEADER))
+                removed_from_accounting = (
+                    "спис" in status
+                    or operation == "списання"
+                    or operation == "передача в іншу частину"
+                )
+
+                if not removed_from_accounting:
+                    bucket["За обліком"] += quantity
+
+                    if "передан" in status and "ремонт" in status:
+                        bucket["Несправні"] += quantity
+                    elif "несправ" in status:
+                        bucket["Несправні"] += quantity
+                    elif "знищ" in status:
+                        bucket["БПВ"] += quantity
+                    elif "справ" in status:
+                        bucket["Наявні (справні)"] += quantity
+
+                note = display_value(row.get("Примітка")).strip()
+                if note and note not in bucket["_notes"]:
+                    bucket["_notes"].append(note)
 
         rows = []
         for index, group_value in enumerate(
@@ -2067,10 +2143,10 @@ class FletOblikApp:
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
                 content=ft.Text(
-                    "Джерело наявності: «Поточний стан». Показник «Штат» "
-                    "береться виключно з аркуша «Штат». Поле «Штатна потреба» "
-                    "з інших аркушів для зведення не використовується. "
-                    "Зміна режиму змінює лише спосіб групування.",
+                    "«Зведений» формується з двох джерел: «Штат» задає "
+                    "штатні позиції та штатну кількість, а «Поточний стан» — "
+                    "фактичний облік і технічний стан. Штатна позиція "
+                    "залишається у зведенні навіть при фактичній наявності 0.",
                     size=12,
                     color=ft.Colors.BLUE_GREY_600,
                 ),
