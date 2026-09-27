@@ -210,6 +210,15 @@ def main():
     drag_app.staff_layout_source_key = None
     drag_app._ensure_staff_layout_state(ws)
     assert drag_app.staff_row_heights[2] == STAFF_MIN_ROW_HEIGHT
+    from io import BytesIO
+    saved_book = BytesIO()
+    drag_app.model.wb.save(saved_book)
+    saved_book.seek(0)
+    reopened = __import__("openpyxl").load_workbook(saved_book)
+    drag_app.model.wb = reopened
+    drag_app.staff_layout_source_key = None
+    drag_app._ensure_staff_layout_state(reopened[SHEET_STAFF])
+    assert drag_app.staff_row_heights[2] == STAFF_MIN_ROW_HEIGHT
     assert STAFF_MIN_COLUMN_WIDTH < STAFF_MAX_COLUMN_WIDTH
     assert STAFF_MIN_ROW_HEIGHT < STAFF_MAX_ROW_HEIGHT
 
