@@ -141,6 +141,7 @@ def main():
         r1 = record("INV-001", "SN-001", "Н-1", "01.01.2024", "А-1", "02.01.2024", "РРЕБ")
         r2 = record("INV-001", "SN-001", "Н-2", "01.02.2024", "А-2", "02.02.2024", "1 МБ")
         for item in (r1, r2):
+            item[MAIN_HEADERS[7]] = "NOM-A"
             item[MAIN_HEADERS[10]] = "Номенклатура А"
             item[MAIN_HEADERS[11]] = "Засоби РЕБ"
             item[MAIN_HEADERS[13]] = "SAP-001"
@@ -223,31 +224,67 @@ def main():
 
         # Перевіряємо три незалежні режими групування Зведеного.
         r3 = record("INV-002", "SN-002", "Н-3", "01.03.2024", "А-3", "02.03.2024", "Склад", qty=2)
+        r3[MAIN_HEADERS[7]] = "NOM-B"
         r3[MAIN_HEADERS[10]] = "Номенклатура Б"
         r3[MAIN_HEADERS[11]] = "Засоби РЕБ"
         r3[MAIN_HEADERS[13]] = "SAP-001"
         r3[MAIN_HEADERS[23]] = "Несправний"
+        r3["Примітка"] = "Потребує ремонту"
+
+        # Штат беремо з агрегованої лівої частини аркуша «Штат».
+        ws_staff = reloaded.wb["Штат"]
+        ws_staff["B2"] = "NOM-A"
+        ws_staff["C2"] = "Номенклатура А"
+        ws_staff["D2"] = 5
+        ws_staff["B3"] = "NOM-B"
+        ws_staff["C3"] = "Номенклатура Б"
+        ws_staff["D3"] = 3
         reloaded.append_record(SHEET_MOVEMENT, r3, "summary test")
         count, skipped = reloaded.rebuild_current_state()
         assert count == 2
 
         by_general = reloaded.build_summary_dataframe(MAIN_HEADERS[11])
         assert len(by_general) == 1
-        assert by_general.iloc[0]["Значення"] == "Засоби РЕБ"
-        assert by_general.iloc[0]["Кількість позицій"] == 2
-        assert by_general.iloc[0]["Загальна кількість"] == 3
+        general = by_general.iloc[0]
+        assert general["Найменування"] == "Засоби РЕБ"
+        assert general["Штат"] == 8
+        assert general["За обліком"] == 3
+        assert general["Наявні (справні)"] == 1
+        assert general["Несправні"] == 2
+        assert general["БПВ"] == 0
+        assert abs(general["% забезпеченості справних"] - 12.5) < 1e-9
+        assert "Потребує ремонту" in general["Примітка"]
 
         by_nomenclature = reloaded.build_summary_dataframe(MAIN_HEADERS[10])
         assert len(by_nomenclature) == 2
-        assert set(by_nomenclature["Значення"]) == {"Номенклатура А", "Номенклатура Б"}
+        assert set(by_nomenclature["Найменування"]) == {"Номенклатура А", "Номенклатура Б"}
+        nomenclature_a = by_nomenclature[
+            by_nomenclature["Найменування"] == "Номенклатура А"
+        ].iloc[0]
+        assert nomenclature_a["Штат"] == 5
+        assert nomenclature_a["За обліком"] == 1
+        assert nomenclature_a["Наявні (справні)"] == 1
+        assert abs(nomenclature_a["% забезпеченості справних"] - 20.0) < 1e-9
 
         by_sap = reloaded.rebuild_summary(MAIN_HEADERS[13])
         assert len(by_sap) == 1
-        assert by_sap.iloc[0]["Значення"] == "SAP-001"
+        assert by_sap.iloc[0]["Найменування"] == "SAP-001"
         ws_summary = reloaded.wb[SHEET_SUMMARY]
-        assert [ws_summary.cell(1, i).value for i in range(1, len(SUMMARY_OUTPUT_HEADERS) + 1)] == SUMMARY_OUTPUT_HEADERS
-        assert ws_summary["C2"].value == "SAP-001"
-        assert ws_summary["E2"].value == 3
+        assert ws_summary["A1"].value == "№ з/п"
+        assert ws_summary["B1"].value == "Номер матеріалу в SAP"
+        assert ws_summary["C1"].value == "Штат"
+        assert ws_summary["D1"].value == "За обліком"
+        assert ws_summary["E1"].value == "Наявні (справні)"
+        assert ws_summary["F1"].value == "Несправні"
+        assert ws_summary["G1"].value == "БПВ"
+        assert ws_summary["H1"].value == "% забезпеченості справних"
+        assert ws_summary["I1"].value == "Примітка"
+        assert ws_summary["B2"].value == "SAP-001"
+        assert ws_summary["C2"].value == 8
+        assert ws_summary["D2"].value == 3
+        assert ws_summary["E2"].value == 1
+        assert ws_summary["F2"].value == 2
+        assert abs(ws_summary["H2"].value - 12.5) < 1e-9
 
         reloaded.save()
         assert path.exists() and path.stat().st_size > 0
