@@ -2335,7 +2335,12 @@ class FletOblikApp:
                         )
                     )
                 )
-            rows.append(ft.DataRow(cells=cells))
+            rows.append(
+                fdt.DataRow2(
+                    cells=cells,
+                    specific_row_height=row_height,
+                )
+            )
 
         table = fdt.DataTable2(
             columns=columns,
@@ -2350,7 +2355,9 @@ class FletOblikApp:
             visible_vertical_scroll_bar=True,
             min_width=1900,
             heading_row_height=68,
-            data_row_height=max_row_height,
+            # 70 px — базова висота. Окремі DataRow2 перевизначають її через
+            # specific_row_height залежно від довжини свого тексту.
+            data_row_height=70,
             column_spacing=8,
             horizontal_margin=8,
         )
@@ -2568,7 +2575,6 @@ class FletOblikApp:
 
         left_index = 0
         right_index = 0
-        max_row_height = 70
         for row_no in range(2, ws.max_row + 1):
             values = [ws.cell(row_no, col).value for col in range(1, 14)]
 
@@ -2587,9 +2593,9 @@ class FletOblikApp:
             if query and not any(query in norm(display_value(value)) for value in values):
                 continue
 
-            # Висота всієї таблиці підлаштовується під найдовшу назву,
-            # щоб жодне найменування не обрізалось вертикально.
-            max_row_height = max(max_row_height, estimate_staff_row_height(values))
+            # Кожен рядок отримує власну висоту. Короткі назви залишаються
+            # компактними, а довгі збільшують тільки свій рядок.
+            row_height = estimate_staff_row_height(values)
 
             cells = []
             for col, value in enumerate(values, start=1):
