@@ -2456,12 +2456,140 @@ class FletOblikApp:
         self.row_action_controls[excel_row] = host
         return host
 
+    def _render_staff(self) -> None:
+        """Показує дві таблиці аркуша «Штат» без втрати повторюваних заголовків."""
+        self.table_host.controls.clear()
+        self.sheet_title.value = SHEET_STAFF
+        self.file_label.value = (
+            str(self.model.path) if self.model.path else "Файл не відкрито"
+        )
+
+        self.search.visible = True
+        self.btn_add.visible = False
+        self.btn_edit.visible = False
+        self.btn_delete.visible = False
+        self.action_menu.visible = False
+        self.summary_group_dropdown.visible = False
+        self.btn_summary_refresh.visible = False
+
+        if self.model.wb is None or SHEET_STAFF not in self.model.wb.sheetnames:
+            self.table_host.controls.append(
+                ft.Container(
+                    padding=30,
+                    content=ft.Text(
+                        "Відкрийте Excel-файл або створіть нову книгу.",
+                        color=ft.Colors.BLUE_GREY_600,
+                    ),
+                )
+            )
+            self.page.update()
+            return
+
+        ws = self.model.wb[SHEET_STAFF]
+        query = norm(self.search.value)
+        rows = []
+
+        widths = {
+            1: 70,   2: 180, 3: 360, 4: 105, 5: 200,
+            6: 24,
+            7: 70,   8: 180, 9: 360, 10: 105, 11: 120, 12: 210, 13: 250,
+        }
+
+        for row_no in range(2, ws.max_row + 1):
+            values = [ws.cell(row_no, col).value for col in range(1, 14)]
+            if not any(value not in (None, "") for value in values):
+                continue
+            if query and not any(query in norm(display_value(value)) for value in values):
+                continue
+
+            cells = []
+            for col, value in enumerate(values, start=1):
+                if col == 6:
+                    cells.append(
+                        ft.DataCell(
+                            ft.Container(width=widths[col])
+                        )
+                    )
+                    continue
+                cells.append(
+                    ft.DataCell(
+                        ft.Container(
+                            width=widths[col],
+                            padding=4,
+                            content=ft.Text(
+                                display_value(value),
+                                size=12,
+                                max_lines=4,
+                            ),
+                        )
+                    )
+                )
+            rows.append(ft.DataRow(cells=cells))
+
+        columns = []
+        for col, header in enumerate(STAFF_HEADERS, start=1):
+            if col == 6:
+                columns.append(
+                    ft.DataColumn(label=ft.Container(width=widths[col]))
+                )
+                continue
+            columns.append(
+                ft.DataColumn(
+                    label=ft.Container(
+                        width=widths[col],
+                        padding=4,
+                        content=ft.Text(
+                            header,
+                            size=11,
+                            weight=ft.FontWeight.BOLD,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                    )
+                )
+            )
+
+        table = fdt.DataTable2(
+            columns=columns,
+            rows=rows,
+            expand=True,
+            heading_row_color=ft.Colors.BLUE_50,
+            fixed_top_rows=1,
+            visible_horizontal_scroll_bar=True,
+            visible_vertical_scroll_bar=True,
+            min_width=2300,
+            heading_row_height=76,
+            data_row_height=70,
+            column_spacing=4,
+            horizontal_margin=4,
+        )
+
+        self.table_host.controls.extend([
+            ft.Container(
+                padding=ft.Padding.only(bottom=8),
+                content=ft.Text(
+                    "Ліва таблиця — узагальнений штат військової частини. "
+                    "Права — деталізація штатної потреби по підрозділах.",
+                    size=12,
+                    color=ft.Colors.BLUE_GREY_600,
+                ),
+            ),
+            ft.Container(expand=True, content=table),
+        ])
+
+        self.status.value = (
+            f"{SHEET_STAFF}: {len(rows)} рядків | {self.model.path or ''}"
+        )
+        self.page.update()
+
     def _refresh_table(self):
         if self.current_sheet == SETTINGS_VIEW:
             self._render_settings()
             return
         if self.current_sheet == SHEET_SUMMARY:
             self._render_summary(sync_sheet=True)
+            return
+        if self.current_sheet == SHEET_STAFF:
+            self._render_staff()
             return
 
         self.search.visible = True
