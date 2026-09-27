@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -194,6 +195,7 @@ STAFF_MIN_COLUMN_WIDTH = 48
 STAFF_MAX_COLUMN_WIDTH = 700
 STAFF_MIN_ROW_HEIGHT = 34
 STAFF_MAX_ROW_HEIGHT = 600
+STAFF_UI_HEIGHTS_NAME = "_OblikStaffUIHeights"
 
 
 OLD_STAFF_HEADERS = [
@@ -267,9 +269,9 @@ def estimate_staff_row_height(values: list[Any]) -> int:
             visual_lines += max(1, (len(physical_line) + 41) // 42)
         max_lines = max(max_lines, visual_lines)
 
-    # 28 px на рядок тексту + внутрішні відступи. Уже два рядки
-    # збільшують висоту понад базові 70 px, тому нижній рядок не підрізається.
-    return max(70, max_lines * 28 + 18)
+    # Для тексту 12 px достатньо 21 px на рядок і 16 px внутрішніх відступів.
+    # Це зберігає повну назву і не розтягує кожен рядок до висоти вікна.
+    return max(48, max_lines * 21 + 16)
 
 
 def staff_ui_numbered_values(
@@ -1480,6 +1482,7 @@ class FletOblikApp:
         self.staff_row_controls: dict[int, list[ft.Control]] = defaultdict(list)
         self.staff_grid_control: Optional[ft.Container] = None
         self.staff_column_drag_x: dict[int, float] = {}
+        self.staff_row_drag_y: dict[int, float] = {}
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -2734,24 +2737,43 @@ class FletOblikApp:
                 min(STAFF_MAX_COLUMN_WIDTH, pixel_width),
             )
 
-        # Ручні висоти Excel-рядків теж відновлюємо.
-        # 1 point ≈ 1.333 px, тому ділимо на 0.75.
+        # Старі файли могли містити висоти Excel у сотні пікселів,
+        # хоча користувач не змінював їх у програмі. Тому стандартний рядок
+        # підбирається за текстом, а відновлюємо тільки наші ручні розміри.
         self.staff_row_heights = {}
-        for row_no in range(2, ws.max_row + 1):
-            excel_height = ws.row_dimensions[row_no].height
-            if excel_height is None:
-                continue
-            pixel_height = float(excel_height) / 0.75
-            self.staff_row_heights[row_no] = max(
-                STAFF_MIN_ROW_HEIGHT,
-                min(STAFF_MAX_ROW_HEIGHT, pixel_height),
-            )
+        saved = self.model.wb.defined_names.get(STAFF_UI_HEIGHTS_NAME)
+        if saved is not None:
+            serialized = (saved.attr_text or "").strip('"')
+            for pair in serialized.split(";"):
+                try:
+                    row_text, height_text = pair.split(":", 1)
+                    row_no = int(row_text)
+                    pixel_height = float(height_text)
+                except (ValueError, TypeError):
+                    continue
+                if 2 <= row_no <= ws.max_row:
+                    self.staff_row_heights[row_no] = max(
+                        STAFF_MIN_ROW_HEIGHT,
+                        min(STAFF_MAX_ROW_HEIGHT, pixel_height),
+                    )
 
         # Скидаємо посилання на старі UI-контроли — новий render створить свої.
         self.staff_column_controls = defaultdict(list)
         self.staff_row_controls = defaultdict(list)
         self.staff_grid_control = None
         self.staff_layout_source_key = source_key
+
+    def _save_staff_ui_heights(self) -> None:
+        """Зберігає лише змінені в Oblik висоти окремо від стилів Excel."""
+        if self.model.wb is None:
+            return
+        saved = ";".join(
+            f"{row_no}:{round(height, 2)}"
+            for row_no, height in sorted(self.staff_row_heights.items())
+        )
+        self.model.wb.defined_names.add(
+            DefinedName(STAFF_UI_HEIGHTS_NAME, attr_text=f'"{saved}"')
+        )
 
     @staticmethod
     def _drag_delta(e, axis: str) -> float:
@@ -2914,9 +2936,38 @@ class FletOblikApp:
         if self.model.wb is not None:
             ws = self.model.wb[SHEET_STAFF]
             ws.row_dimensions[row_no].height = round(new_height * 0.75, 2)
+            self._save_staff_ui_heights()
             self.model.dirty = True
 
         self.page.update()
+
+    def _start_staff_row_drag(self, row_no: int, e) -> None:
+        """Запам'ятовує глобальну вертикальну координату початку жесту."""
+        position = getattr(e, "global_position", None)
+        y = getattr(position, "y", None)
+        if y is not None:
+            self.staff_row_drag_y[row_no] = float(y)
+
+    def _pan_staff_row(self, row_no: int, e) -> None:
+        """Розширює або звужує один рядок за реальним рухом миші."""
+        position = getattr(e, "global_position", None)
+        y = getattr(position, "y", None)
+        if y is None:
+            self._resize_staff_row(row_no, e)
+            return
+        y = float(y)
+        previous = self.staff_row_drag_y.get(row_no)
+        self.staff_row_drag_y[row_no] = y
+        if previous is not None:
+            self._resize_staff_row(
+                row_no,
+                type("RowDragDelta", (), {"primary_delta": y - previous})(),
+            )
+
+    def _end_staff_row_drag(self, row_no: int, e=None) -> None:
+        """Завершує вертикальний жест і залишає ручну висоту в книзі."""
+        self.staff_row_drag_y.pop(row_no, None)
+        self._staff_resize_finished(e)
 
     def _reset_staff_row_height(
         self,
@@ -2940,6 +2991,7 @@ class FletOblikApp:
             ws = self.model.wb[SHEET_STAFF]
             # None повертає Excel-рядок до стандартної/автоматичної висоти.
             ws.row_dimensions[row_no].height = None
+            self._save_staff_ui_heights()
             self.model.dirty = True
 
         self.page.update()
@@ -3176,18 +3228,29 @@ class FletOblikApp:
                 if col in (1, 7):
                     row_handle = ft.GestureDetector(
                         width=width,
-                        height=12,
+                        height=18,
                         left=0,
                         bottom=0,
                         mouse_cursor=ft.MouseCursor.RESIZE_UP_DOWN,
                         drag_interval=0,
-                        on_vertical_drag_update=(
-                            lambda e, excel_row=row_no: self._resize_staff_row(
+                        on_pan_start=(
+                            lambda e, excel_row=row_no: self._start_staff_row_drag(
                                 excel_row,
                                 e,
                             )
                         ),
-                        on_vertical_drag_end=self._staff_resize_finished,
+                        on_pan_update=(
+                            lambda e, excel_row=row_no: self._pan_staff_row(
+                                excel_row,
+                                e,
+                            )
+                        ),
+                        on_pan_end=(
+                            lambda e, excel_row=row_no: self._end_staff_row_drag(
+                                excel_row,
+                                e,
+                            )
+                        ),
                         on_double_tap=(
                             lambda e, excel_row=row_no, fitted=auto_height:
                                 self._reset_staff_row_height(
@@ -3198,8 +3261,8 @@ class FletOblikApp:
                         ),
                         content=ft.Container(
                             width=width,
-                            height=12,
-                            bgcolor=ft.Colors.BLUE_GREY_100,
+                            height=18,
+                            bgcolor=UI_ACCENT,
                         ),
                     )
 
