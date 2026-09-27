@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.9"
+APP_VERSION = "0.2.10"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -856,16 +856,15 @@ class OblikWorkbook:
                 },
             )
 
-            # Штат рахуємо один раз на номенклатуру, щоб однакове значення
-            # «Штатна потреба» не множилось на кількість інвентарних одиниць.
+            # «Штат» у зведеній таблиці має єдине джерело істини — аркуш «Штат».
+            # Поле «Штатна потреба» з «Рух майна» / «Поточний стан» тут
+            # принципово не використовується навіть як резервне джерело.
             if nomenclature_key not in bucket["_staff_keys"]:
                 staff_value = None
                 if nomenclature_code:
                     staff_value = staff_lookup.get("code:" + nomenclature_code)
                 if staff_value is None and nomenclature_name:
                     staff_value = staff_lookup.get("name:" + nomenclature_name)
-                if staff_value is None:
-                    staff_value = numeric_value(row.get(MAIN_HEADERS[14]))
                 if staff_value is not None:
                     bucket["Штат"] += staff_value
                 bucket["_staff_keys"].add(nomenclature_key)
@@ -2064,8 +2063,9 @@ class FletOblikApp:
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
                 content=ft.Text(
-                    "Джерело: «Поточний стан». Штат береться з аркуша «Штат», "
-                    "а за відсутності відповідності — з поля «Штатна потреба». "
+                    "Джерело наявності: «Поточний стан». Показник «Штат» "
+                    "береться виключно з аркуша «Штат». Поле «Штатна потреба» "
+                    "з інших аркушів для зведення не використовується. "
                     "Зміна режиму змінює лише спосіб групування.",
                     size=12,
                     color=ft.Colors.BLUE_GREY_600,
