@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS, staff_ui_numbered_values, estimate_staff_row_height)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS, staff_ui_numbered_values, estimate_staff_row_height, STAFF_MIN_COLUMN_WIDTH, STAFF_MAX_COLUMN_WIDTH, STAFF_MIN_ROW_HEIGHT, STAFF_MAX_ROW_HEIGHT)
 import pandas as pd
 import flet as ft
 import flet_datatable2 as fdt
@@ -144,6 +144,22 @@ def main():
     ])
     assert short_height >= 70
     assert long_height > short_height
+
+    # Excel-like resize використовує GestureDetector та відповідні курсори.
+    column_resize = ft.GestureDetector(
+        width=8,
+        mouse_cursor=ft.MouseCursor.RESIZE_LEFT_RIGHT,
+        on_horizontal_drag_update=lambda e: None,
+    )
+    row_resize = ft.GestureDetector(
+        height=8,
+        mouse_cursor=ft.MouseCursor.RESIZE_UP_DOWN,
+        on_vertical_drag_update=lambda e: None,
+    )
+    assert column_resize.mouse_cursor == ft.MouseCursor.RESIZE_LEFT_RIGHT
+    assert row_resize.mouse_cursor == ft.MouseCursor.RESIZE_UP_DOWN
+    assert STAFF_MIN_COLUMN_WIDTH < STAFF_MAX_COLUMN_WIDTH
+    assert STAFF_MIN_ROW_HEIGHT < STAFF_MAX_ROW_HEIGHT
 
     assert format_inventory_number("ОВТ-", 25, 6) == "ОВТ-000025"
     assert format_inventory_number("100-", 7, 4, "/26") == "100-0007/26"
