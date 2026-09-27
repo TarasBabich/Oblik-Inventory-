@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.14"
+APP_VERSION = "0.2.15"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -2495,10 +2495,36 @@ class FletOblikApp:
             7: 70,   8: 180, 9: 360, 10: 105, 11: 120, 12: 210, 13: 250,
         }
 
+        left_index = 0
+        right_index = 0
         for row_no in range(2, ws.max_row + 1):
             values = [ws.cell(row_no, col).value for col in range(1, 14)]
-            if not any(value not in (None, "") for value in values):
+
+            # У програмі не показуємо Excel-формули типу =ROW()-1.
+            # Обидві таблиці мають власну незалежну послідовну нумерацію.
+            left_has_data = any(
+                values[col - 1] not in (None, "")
+                for col in range(2, 6)
+            )
+            right_has_data = any(
+                values[col - 1] not in (None, "")
+                for col in range(8, 14)
+            )
+            if not left_has_data and not right_has_data:
                 continue
+
+            if left_has_data:
+                left_index += 1
+                values[0] = left_index
+            else:
+                values[0] = None
+
+            if right_has_data:
+                right_index += 1
+                values[6] = right_index
+            else:
+                values[6] = None
+
             if query and not any(query in norm(display_value(value)) for value in values):
                 continue
 
