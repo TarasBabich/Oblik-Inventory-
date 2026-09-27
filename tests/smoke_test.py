@@ -255,9 +255,28 @@ def main():
         assert abs(general["% забезпеченості справних"] - 12.5) < 1e-9
         assert "Потребує ремонту" in general["Примітка"]
 
+        # Поле «Штатна потреба» поза аркушем «Штат» не повинно впливати
+        # на зведення, навіть якщо в ньому є значення.
+        orphan = record("INV-003", "SN-003", "Н-4", "01.04.2024", "А-4", "02.04.2024", "Склад")
+        orphan[MAIN_HEADERS[7]] = "NOM-C"
+        orphan[MAIN_HEADERS[10]] = "Номенклатура В"
+        orphan[MAIN_HEADERS[11]] = "Без штатної відповідності"
+        orphan[MAIN_HEADERS[13]] = "SAP-999"
+        orphan[MAIN_HEADERS[14]] = 99
+        orphan[MAIN_HEADERS[23]] = "Справний"
+        reloaded.append_record(SHEET_MOVEMENT, orphan, "staff source test")
+        reloaded.rebuild_current_state()
+        orphan_summary = reloaded.build_summary_dataframe(MAIN_HEADERS[11])
+        orphan_row = orphan_summary[
+            orphan_summary["Найменування"] == "Без штатної відповідності"
+        ].iloc[0]
+        assert orphan_row["Штат"] == 0
+        assert orphan_row["Наявні (справні)"] == 1
+        assert pd.isna(orphan_row["% забезпеченості справних"])
+
         by_nomenclature = reloaded.build_summary_dataframe(MAIN_HEADERS[10])
-        assert len(by_nomenclature) == 2
-        assert set(by_nomenclature["Найменування"]) == {"Номенклатура А", "Номенклатура Б"}
+        assert len(by_nomenclature) == 3
+        assert set(by_nomenclature["Найменування"]) == {"Номенклатура А", "Номенклатура Б", "Номенклатура В"}
         nomenclature_a = by_nomenclature[
             by_nomenclature["Найменування"] == "Номенклатура А"
         ].iloc[0]
@@ -267,8 +286,9 @@ def main():
         assert abs(nomenclature_a["% забезпеченості справних"] - 20.0) < 1e-9
 
         by_sap = reloaded.rebuild_summary(MAIN_HEADERS[13])
-        assert len(by_sap) == 1
-        assert by_sap.iloc[0]["Найменування"] == "SAP-001"
+        assert len(by_sap) == 2
+        sap_001 = by_sap[by_sap["Найменування"] == "SAP-001"].iloc[0]
+        assert sap_001["Штат"] == 8
         ws_summary = reloaded.wb[SHEET_SUMMARY]
         assert ws_summary["A1"].value == "№ з/п"
         assert ws_summary["B1"].value == "Номер матеріалу в SAP"
@@ -279,12 +299,24 @@ def main():
         assert ws_summary["G1"].value == "БПВ"
         assert ws_summary["H1"].value == "% забезпеченості справних"
         assert ws_summary["I1"].value == "Примітка"
-        assert ws_summary["B2"].value == "SAP-001"
-        assert ws_summary["C2"].value == 8
-        assert ws_summary["D2"].value == 3
-        assert ws_summary["E2"].value == 1
-        assert ws_summary["F2"].value == 2
-        assert abs(ws_summary["H2"].value - 12.5) < 1e-9
+        # SAP-001 має штат 8 виключно з аркуша «Штат».
+        summary_rows = {
+            ws_summary.cell(row, 2).value: row
+            for row in range(2, ws_summary.max_row + 1)
+        }
+        sap_row = summary_rows["SAP-001"]
+        assert ws_summary.cell(sap_row, 3).value == 8
+        assert ws_summary.cell(sap_row, 4).value == 3
+        assert ws_summary.cell(sap_row, 5).value == 1
+        assert ws_summary.cell(sap_row, 6).value == 2
+        assert abs(ws_summary.cell(sap_row, 8).value - 12.5) < 1e-9
+
+        # SAP-999 не має відповідності на аркуші «Штат»: штат = 0,
+        # попри «Штатна потреба» = 99 у записі руху.
+        orphan_sap_row = summary_rows["SAP-999"]
+        assert ws_summary.cell(orphan_sap_row, 3).value == 0
+        assert ws_summary.cell(orphan_sap_row, 5).value == 1
+        assert ws_summary.cell(orphan_sap_row, 8).value is None
 
         reloaded.save()
         assert path.exists() and path.stat().st_size > 0
