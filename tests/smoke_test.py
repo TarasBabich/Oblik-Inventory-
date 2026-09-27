@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS, staff_ui_numbered_values)
 import pandas as pd
 import flet as ft
 import flet_datatable2 as fdt
@@ -103,6 +103,31 @@ def main():
         on_select=lambda e: None,
     )
     assert summary_dropdown.value == "Узагальнена назва"
+
+    # У Flet-відображенні «Штат» формули нумерації не показуються як текст.
+    staff_values = [
+        "=ROW()-1", "NOM-A", "Назва А", "од.", 5, None,
+        "=ROW()-1", "NOM-A", "Назва А", "од.", 2, "РРЕБ", None,
+    ]
+    numbered, left_no, right_no, left_has, right_has = staff_ui_numbered_values(
+        staff_values, 0, 0
+    )
+    assert left_has is True and right_has is True
+    assert numbered[0] == 1
+    assert numbered[6] == 1
+    assert left_no == 1 and right_no == 1
+
+    right_only = [
+        "=ROW()-1", None, None, None, None, None,
+        "=ROW()-1", "NOM-B", "Назва Б", "од.", 1, "1 МБ", None,
+    ]
+    numbered2, left_no, right_no, left_has, right_has = staff_ui_numbered_values(
+        right_only, left_no, right_no
+    )
+    assert left_has is False and right_has is True
+    assert numbered2[0] is None
+    assert numbered2[6] == 2
+    assert left_no == 1 and right_no == 2
 
     assert format_inventory_number("ОВТ-", 25, 6) == "ОВТ-000025"
     assert format_inventory_number("100-", 7, 4, "/26") == "100-0007/26"
