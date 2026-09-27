@@ -144,7 +144,7 @@ def main():
         "КОМПЛЕКС РАДІОЕЛЕКТРОННОЇ БОРОТЬБИ З БЕЗПІЛОТНИМИ ЛІТАЛЬНИМИ АПАРАТАМИ БУКОВЕЛЬ-АД",
         "од.", 1, "РРЕБ", None,
     ])
-    assert short_height >= 70
+    assert 48 <= short_height < 70
     assert long_height > short_height
 
     # Excel-like resize використовує GestureDetector та відповідні курсори.
@@ -186,6 +186,30 @@ def main():
     assert drag_app.model.wb[SHEET_STAFF].column_dimensions["A"].width == 15.62
     drag_app._end_staff_column_drag(1)
     assert 1 not in drag_app.staff_column_drag_x
+    # Висота старого Excel-рядка не змушує UI займати пів екрана.
+    ws = drag_app.model.wb[SHEET_STAFF]
+    ws.cell(2, 2, "NOM-A")
+    ws.row_dimensions[2].height = 320
+    drag_app.model.path = Path("staff.xlsx")
+    drag_app.staff_layout_source_key = None
+    drag_app.staff_row_heights = {}
+    drag_app.staff_row_controls = {2: [ft.Container(height=short_height)]}
+    drag_app.staff_row_drag_y = {}
+    drag_app._ensure_staff_layout_state(ws)
+    assert 2 not in drag_app.staff_row_heights
+    drag_app.staff_row_controls = {2: [ft.Container(height=short_height)]}
+    pos_y = lambda y: SimpleNamespace(global_position=SimpleNamespace(y=y))
+    drag_app._start_staff_row_drag(2, pos_y(200))
+    drag_app._pan_staff_row(2, pos_y(230))
+    assert drag_app.staff_row_heights[2] == short_height + 30
+    drag_app._pan_staff_row(2, pos_y(180))
+    assert drag_app.staff_row_heights[2] == STAFF_MIN_ROW_HEIGHT
+    assert ws.row_dimensions[2].height == round(STAFF_MIN_ROW_HEIGHT * 0.75, 2)
+    drag_app._end_staff_row_drag(2)
+    assert 2 not in drag_app.staff_row_drag_y
+    drag_app.staff_layout_source_key = None
+    drag_app._ensure_staff_layout_state(ws)
+    assert drag_app.staff_row_heights[2] == STAFF_MIN_ROW_HEIGHT
     assert STAFF_MIN_COLUMN_WIDTH < STAFF_MAX_COLUMN_WIDTH
     assert STAFF_MIN_ROW_HEIGHT < STAFF_MAX_ROW_HEIGHT
 
