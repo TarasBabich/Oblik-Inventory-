@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.14"
+APP_VERSION = "0.2.15"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -210,6 +210,77 @@ def display_value(value: Any) -> str:
     if isinstance(value, datetime):
         return value.strftime("%d.%m.%Y")
     return str(value)
+
+
+def estimate_staff_row_height(values: list[Any]) -> int:
+    """Оцінює висоту рядка «Штат», щоб довгі назви були видимі повністю."""
+
+    # Найдовші тексти знаходяться у двох колонках «Найменування згідно номенклатору».
+    # Для ширини близько 360 px у середньому поміщається приблизно 42 символи в рядок.
+    name_columns = (2, 8)  # нульові індекси C та I
+    max_lines = 1
+
+    for index in name_columns:
+        text = display_value(values[index] if index < len(values) else "").strip()
+        if not text:
+            continue
+
+        # Враховуємо як явні переноси рядка, так і автоматичне перенесення довгого тексту.
+        visual_lines = 0
+        for physical_line in text.splitlines() or [""]:
+            visual_lines += max(1, (len(physical_line) + 41) // 42)
+        max_lines = max(max_lines, visual_lines)
+
+    # 28 px на рядок тексту + внутрішні відступи. Уже два рядки
+    # збільшують висоту понад базові 70 px, тому нижній рядок не підрізається.
+    return max(70, max_lines * 28 + 18)
+
+
+def staff_ui_numbered_values(
+    values: list[Any],
+    left_index: int,
+    right_index: int,
+) -> tuple[list[Any], int, int, bool, bool]:
+    """Показує людську нумерацію для двох незалежних таблиць аркуша «Штат»."""
+
+    # Працюємо з копією рядка, щоб відображення в Flet не змінювало Excel-дані.
+    result = list(values)
+
+    # Аркуш «Штат» має фіксовану структуру A:M, тому доповнюємо короткі рядки
+    # порожніми значеннями, якщо Excel фактично не створив крайні комірки.
+    while len(result) < 13:
+        result.append(None)
+
+    # Ліва таблиця вважається заповненою, якщо є дані хоча б у B:E.
+    # Колонку A навмисно не враховуємо, бо там може лежати лише формула =ROW()-1.
+    left_has_data = any(
+        result[col - 1] not in (None, "")
+        for col in range(2, 6)
+    )
+
+    # Права таблиця вважається заповненою, якщо є дані хоча б у H:M.
+    # Колонку G теж не враховуємо з тієї ж причини — це службовий № з/п.
+    right_has_data = any(
+        result[col - 1] not in (None, "")
+        for col in range(8, 14)
+    )
+
+    # Ліва таблиця має власну нумерацію 1, 2, 3... незалежно від Excel-формули.
+    if left_has_data:
+        left_index += 1
+        result[0] = left_index
+    else:
+        result[0] = None
+
+    # Права таблиця нумерується окремо від лівої, тому її лічильник незалежний.
+    if right_has_data:
+        right_index += 1
+        result[6] = right_index
+    else:
+        result[6] = None
+
+    # Повертаємо вже підготовлений для інтерфейсу рядок і обидва нові лічильники.
+    return result, left_index, right_index, left_has_data, right_has_data
 
 
 def numeric_value(value: Any) -> Optional[float]:
@@ -2264,7 +2335,12 @@ class FletOblikApp:
                         )
                     )
                 )
-            rows.append(ft.DataRow(cells=cells))
+            rows.append(
+                fdt.DataRow2(
+                    cells=cells,
+                    specific_row_height=row_height,
+                )
+            )
 
         table = fdt.DataTable2(
             columns=columns,
@@ -2279,6 +2355,8 @@ class FletOblikApp:
             visible_vertical_scroll_bar=True,
             min_width=1900,
             heading_row_height=68,
+            # 70 px — базова висота. Окремі DataRow2 перевизначають її через
+            # specific_row_height залежно від довжини свого тексту.
             data_row_height=70,
             column_spacing=8,
             horizontal_margin=8,
@@ -2495,12 +2573,29 @@ class FletOblikApp:
             7: 70,   8: 180, 9: 360, 10: 105, 11: 120, 12: 210, 13: 250,
         }
 
+        left_index = 0
+        right_index = 0
         for row_no in range(2, ws.max_row + 1):
             values = [ws.cell(row_no, col).value for col in range(1, 14)]
-            if not any(value not in (None, "") for value in values):
+
+            # У програмі не показуємо Excel-формули типу =ROW()-1.
+            # Обидві таблиці мають власну незалежну послідовну нумерацію.
+            (
+                values,
+                left_index,
+                right_index,
+                left_has_data,
+                right_has_data,
+            ) = staff_ui_numbered_values(values, left_index, right_index)
+            if not left_has_data and not right_has_data:
                 continue
+
             if query and not any(query in norm(display_value(value)) for value in values):
                 continue
+
+            # Кожен рядок отримує власну висоту. Короткі назви залишаються
+            # компактними, а довгі збільшують тільки свій рядок.
+            row_height = estimate_staff_row_height(values)
 
             cells = []
             for col, value in enumerate(values, start=1):
@@ -2519,7 +2614,10 @@ class FletOblikApp:
                             content=ft.Text(
                                 display_value(value),
                                 size=12,
-                                max_lines=4,
+                                # Назви в C та I показуємо повністю без ліміту рядків.
+                                # Для інших колонок теж не обрізаємо текст штучно.
+                                max_lines=None,
+                                no_wrap=False,
                             ),
                         )
                     )
