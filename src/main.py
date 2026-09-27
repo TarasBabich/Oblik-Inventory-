@@ -37,7 +37,7 @@ import flet as ft
 import flet_datatable2 as fdt
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.10"
+APP_VERSION = "0.2.11"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -1138,6 +1138,9 @@ class FletOblikApp:
         self.settings_fields: dict[str, ft.TextField] = {}
         self.commission_member_entries: list[dict[str, Any]] = []
         self.summary_group_mode = "Узагальнена назва"
+        self.hovered_excel_row: Optional[int] = None
+        self.row_action_controls: dict[int, ft.Container] = {}
+        self.row_table_rows: dict[int, fdt.DataRow2] = {}
 
         self.page.title = f"{APP_TITLE} {APP_VERSION}"
         self.page.theme_mode = ft.ThemeMode.LIGHT
@@ -1357,7 +1360,6 @@ class FletOblikApp:
                 self.summary_group_dropdown,
                 self.btn_summary_refresh,
                 self.btn_add,
-                self.action_menu,
             ],
             spacing=8,
         )
@@ -2082,6 +2084,149 @@ class FletOblikApp:
         )
         self.page.update()
 
+    def _row_action_items(self) -> list[ft.PopupMenuItem]:
+        return [
+            ft.PopupMenuItem(
+                icon=ft.Icons.SWAP_HORIZ,
+                content="Перемістити",
+                on_click=self._open_move_dialog,
+            ),
+            ft.PopupMenuItem(
+                icon=ft.Icons.INVENTORY_2,
+                content="Видати запас",
+                on_click=self._open_issue_stock_dialog,
+            ),
+            ft.PopupMenuItem(
+                icon=ft.Icons.ASSIGNMENT_RETURN,
+                content="Повернути запас",
+                on_click=self._open_return_stock_dialog,
+            ),
+            ft.PopupMenuItem(
+                icon=ft.Icons.DELETE_SWEEP,
+                content="Списати",
+                on_click=self._open_writeoff_dialog,
+            ),
+            ft.PopupMenuItem(
+                icon=ft.Icons.HEALTH_AND_SAFETY,
+                content="Змінити стан",
+                on_click=self._open_status_dialog,
+            ),
+            ft.PopupMenuItem(content=ft.Divider(height=1), height=12),
+            ft.PopupMenuItem(
+                icon=ft.Icons.HISTORY,
+                content="Переглянути історію",
+                on_click=self._show_selected_history,
+            ),
+            ft.PopupMenuItem(
+                icon=ft.Icons.EDIT,
+                content="Редагувати запис",
+                on_click=self._edit_record,
+            ),
+            ft.PopupMenuItem(
+                icon=ft.Icons.DELETE_OUTLINE,
+                content="Видалити запис",
+                on_click=self._delete_record,
+            ),
+        ]
+
+    def _update_row_action_visibility(self, *row_ids: Optional[int]) -> None:
+        for row_id in {row for row in row_ids if row is not None}:
+            control = self.row_action_controls.get(row_id)
+            if control is None:
+                continue
+            control.visible = (
+                row_id == self.selected_excel_row
+                or row_id == self.hovered_excel_row
+            )
+            try:
+                control.update()
+            except Exception:
+                pass
+
+    def _hover_row(self, excel_row: int, e=None) -> None:
+        hovering = True
+        if e is not None:
+            hovering = e.data is True or str(e.data).casefold() == "true"
+        if not hovering:
+            return
+        previous = self.hovered_excel_row
+        self.hovered_excel_row = excel_row
+        self._update_row_action_visibility(previous, excel_row, self.selected_excel_row)
+
+    def _table_hover(self, e=None) -> None:
+        hovering = e.data is True or str(e.data).casefold() == "true"
+        if hovering:
+            return
+        previous = self.hovered_excel_row
+        self.hovered_excel_row = None
+        self._update_row_action_visibility(previous, self.selected_excel_row)
+
+    def _select_excel_row(self, excel_row: int) -> None:
+        previous = self.selected_excel_row
+        self.selected_excel_row = excel_row
+
+        for row_id in {row for row in (previous, excel_row) if row is not None}:
+            row_control = self.row_table_rows.get(row_id)
+            if row_control is not None:
+                row_control.selected = row_id == excel_row
+                try:
+                    row_control.update()
+                except Exception:
+                    pass
+
+        self._update_row_action_visibility(
+            previous,
+            excel_row,
+            self.hovered_excel_row,
+        )
+
+    def _activate_row_action(self, excel_row: int, e=None) -> None:
+        self._select_excel_row(excel_row)
+
+    def _build_row_action_control(self, excel_row: int) -> ft.Container:
+        menu = ft.PopupMenuButton(
+            menu_position=ft.PopupMenuPosition.UNDER,
+            tooltip="Дії з цією транзакцією",
+            on_open=lambda e, row=excel_row: self._activate_row_action(row, e),
+            content=ft.Container(
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                border=ft.Border.all(1, ft.Colors.BLUE_200),
+                border_radius=18,
+                bgcolor=ft.Colors.BLUE_50,
+                content=ft.Row(
+                    tight=True,
+                    spacing=4,
+                    controls=[
+                        ft.Icon(ft.Icons.BOLT, size=16, color=ft.Colors.BLUE_700),
+                        ft.Text(
+                            "Дія",
+                            size=12,
+                            weight=ft.FontWeight.W_600,
+                            color=ft.Colors.BLUE_800,
+                        ),
+                        ft.Icon(
+                            ft.Icons.ARROW_DROP_DOWN,
+                            size=18,
+                            color=ft.Colors.BLUE_700,
+                        ),
+                    ],
+                ),
+            ),
+            items=self._row_action_items(),
+        )
+        host = ft.Container(
+            width=105,
+            alignment=ft.Alignment.CENTER,
+            visible=(
+                excel_row == self.selected_excel_row
+                or excel_row == self.hovered_excel_row
+            ),
+            on_hover=lambda e, row=excel_row: self._hover_row(row, e),
+            content=menu,
+        )
+        self.row_action_controls[excel_row] = host
+        return host
+
     def _refresh_table(self):
         if self.current_sheet == SETTINGS_VIEW:
             self._render_settings()
@@ -2094,7 +2239,7 @@ class FletOblikApp:
         self.btn_add.visible = self.current_sheet == SHEET_MOVEMENT
         self.btn_edit.visible = False
         self.btn_delete.visible = False
-        self.action_menu.visible = self.current_sheet == SHEET_MOVEMENT
+        self.action_menu.visible = False
         self.summary_group_dropdown.visible = False
         self.btn_summary_refresh.visible = False
         self.table_host.controls.clear()
