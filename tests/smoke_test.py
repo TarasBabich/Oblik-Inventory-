@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY)
+from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS)
 import pandas as pd
 import flet as ft
 import flet_datatable2 as fdt
@@ -256,14 +256,34 @@ def main():
         r3[MAIN_HEADERS[23]] = "Несправний"
         r3["Примітка"] = "Потребує ремонту"
 
-        # Штат беремо з агрегованої лівої частини аркуша «Штат».
-        ws_staff = reloaded.wb["Штат"]
+        # Штат: дві окремі таблиці A:E та G:M.
+        ws_staff = reloaded.wb[SHEET_STAFF]
+        assert [ws_staff.cell(1, c).value or "" for c in range(1, 14)] == STAFF_HEADERS
+        assert ws_staff["D1"].value == "Од. виміру"
+        assert ws_staff["E1"].value == "Узагальнена кількість за військову частину"
+        assert ws_staff["F1"].value in (None, "")
+        assert ws_staff["J1"].value == "Од. виміру"
+        assert ws_staff["K1"].value == "Кількість"
+        assert ws_staff["L1"].value == "Окремий підрозділ бригади"
+        assert ws_staff["M1"].value == "Окремий підрозділ батальйону/дивізіону"
+
         ws_staff["B2"] = "NOM-A"
         ws_staff["C2"] = "Номенклатура А"
-        ws_staff["D2"] = 5
+        ws_staff["D2"] = "од."
+        ws_staff["E2"] = 5
         ws_staff["B3"] = "NOM-B"
         ws_staff["C3"] = "Номенклатура Б"
-        ws_staff["D3"] = 3
+        ws_staff["D3"] = "од."
+        ws_staff["E3"] = 3
+
+        # Деталізація праворуч не повинна впливати на загальну штатну кількість.
+        ws_staff["G2"] = 1
+        ws_staff["H2"] = "NOM-A"
+        ws_staff["I2"] = "Номенклатура А"
+        ws_staff["J2"] = "од."
+        ws_staff["K2"] = 2
+        ws_staff["L2"] = "РРЕБ"
+        ws_staff["M2"] = ""
         reloaded.append_record(SHEET_MOVEMENT, r3, "summary test")
         count, skipped = reloaded.rebuild_current_state()
         assert count == 2
@@ -303,7 +323,8 @@ def main():
         # присутня у Зведеному з нульовим поточним станом.
         ws_staff["B4"] = "NOM-D"
         ws_staff["C4"] = "Номенклатура Г"
-        ws_staff["D4"] = 7
+        ws_staff["D4"] = "од."
+        ws_staff["E4"] = 7
 
         by_nomenclature = reloaded.build_summary_dataframe(MAIN_HEADERS[10])
         assert len(by_nomenclature) == 4
