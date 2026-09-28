@@ -1389,6 +1389,12 @@ class OblikWorkbook:
 MAX_TABLE_ROWS = 250
 
 
+def selectable_text(*args, **kwargs) -> ft.Text:
+    """Створює звичайний текст Flet, який можна виділити та скопіювати."""
+    kwargs.setdefault("selectable", True)
+    return ft.Text(*args, **kwargs)
+
+
 class AppSettingsStore:
     """Локальні portable-налаштування програми у JSON поруч із Oblik.exe."""
 
@@ -1494,12 +1500,12 @@ class FletOblikApp:
         self.page.window.min_width = 1000
         self.page.window.min_height = 650
 
-        self.status = ft.Text(
+        self.status = selectable_text(
             "Відкрийте існуючу книгу або створіть нову",
             size=12,
             color=UI_MUTED,
         )
-        self.file_label = ft.Text("Файл не відкрито", weight=ft.FontWeight.W_600)
+        self.file_label = selectable_text("Файл не відкрито", weight=ft.FontWeight.W_600)
         self.search = ft.TextField(
             hint_text="Пошук за назвою, кодом або номером…",
             prefix_icon=ft.Icons.SEARCH,
@@ -1563,7 +1569,7 @@ class FletOblikApp:
                     spacing=6,
                     controls=[
                         ft.Icon(ft.Icons.BOLT, size=18, color=ft.Colors.BLUE_700),
-                        ft.Text("Дія", weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_800),
+                        selectable_text("Дія", weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_800),
                         ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=20, color=ft.Colors.BLUE_700),
                     ],
                 ),
@@ -1623,7 +1629,7 @@ class FletOblikApp:
             padding=ft.Padding.symmetric(horizontal=26, vertical=12),
             content=ft.Row(
                 controls=[
-                    ft.Text(
+                    selectable_text(
                         "Облік майна",
                         size=17,
                         weight=ft.FontWeight.BOLD,
@@ -1666,12 +1672,12 @@ class FletOblikApp:
                         border_radius=11,
                         bgcolor=UI_ACCENT,
                         alignment=ft.Alignment.CENTER,
-                        content=ft.Text("O", size=25, weight=ft.FontWeight.BOLD, color=UI_FOREST),
+                        content=selectable_text("O", size=25, weight=ft.FontWeight.BOLD, color=UI_FOREST),
                     ),
                     ft.Column(
                         controls=[
-                            ft.Text("OBLIK", color=ft.Colors.WHITE, size=21, weight=ft.FontWeight.BOLD),
-                            ft.Text("ОБЛІК МАЙНА", color=UI_ACCENT, size=10),
+                            selectable_text("OBLIK", color=ft.Colors.WHITE, size=21, weight=ft.FontWeight.BOLD),
+                            selectable_text("ОБЛІК МАЙНА", color=UI_ACCENT, size=10),
                         ],
                         spacing=0,
                     ),
@@ -1679,7 +1685,7 @@ class FletOblikApp:
                 spacing=11,
             ),
             ft.Container(height=19),
-            ft.Text(
+            selectable_text(
                 "РОБОЧИЙ ПРОСТІР",
                 size=11,
                 weight=ft.FontWeight.BOLD,
@@ -1704,7 +1710,7 @@ class FletOblikApp:
                     spacing=12,
                     controls=[
                         ft.Icon(nav_icons[sheet], size=19, color=ft.Colors.WHITE),
-                        ft.Text(sheet, size=13, color=ft.Colors.WHITE),
+                        selectable_text(sheet, size=13, color=ft.Colors.WHITE),
                     ],
                 ),
                 data=sheet,
@@ -1725,7 +1731,7 @@ class FletOblikApp:
                     spacing=12,
                     controls=[
                         ft.Icon(ft.Icons.SETTINGS, size=19, color=ft.Colors.WHITE),
-                        ft.Text("Налаштування", size=13, color=ft.Colors.WHITE),
+                        selectable_text("Налаштування", size=13, color=ft.Colors.WHITE),
                     ],
                 ),
                 data=SETTINGS_VIEW,
@@ -1744,14 +1750,14 @@ class FletOblikApp:
                 controls=[
                     *nav_controls,
                     ft.Container(expand=True),
-                    ft.Text(f"OBLIK  ·  v{APP_VERSION}", size=11, color="#9FB5A5"),
+                    selectable_text(f"OBLIK  ·  v{APP_VERSION}", size=11, color="#9FB5A5"),
                 ],
                 spacing=8,
             ),
         )
 
         def metric(label: str, icon: str) -> ft.Container:
-            value = ft.Text("—", size=24, weight=ft.FontWeight.BOLD, color=UI_TEXT)
+            value = selectable_text("—", size=24, weight=ft.FontWeight.BOLD, color=UI_TEXT)
             self.metric_values[label] = value
             return ft.Container(
                 expand=True,
@@ -1768,7 +1774,7 @@ class FletOblikApp:
                             content=ft.Icon(icon, color=UI_FOREST_ACTIVE, size=21),
                         ),
                         ft.Column(
-                            controls=[ft.Text(label, size=11, color=UI_MUTED), value],
+                            controls=[selectable_text(label, size=11, color=UI_MUTED), value],
                             spacing=3,
                         ),
                     ],
@@ -1808,7 +1814,7 @@ class FletOblikApp:
                         controls=[
                             ft.Column(
                                 controls=[
-                                    ft.Text(
+                                    selectable_text(
                                         self.current_sheet,
                                         key="sheet_title",
                                         size=23,
@@ -1904,8 +1910,8 @@ class FletOblikApp:
     def _show_message(self, title: str, message: str):
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(title),
-            content=ft.Text(message),
+            title=selectable_text(title),
+            content=selectable_text(message),
             actions=[
                 ft.TextButton("OK", on_click=lambda e: self.page.pop_dialog())
             ],
@@ -2023,8 +2029,8 @@ class FletOblikApp:
             bgcolor=ft.Colors.WHITE,
             content=ft.Column(
                 controls=[
-                    ft.Text(title, size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text(subtitle, size=12, color=ft.Colors.BLUE_GREY_600),
+                    selectable_text(title, size=18, weight=ft.FontWeight.BOLD),
+                    selectable_text(subtitle, size=12, color=ft.Colors.BLUE_GREY_600),
                     ft.Divider(),
                     *controls,
                 ],
@@ -2107,7 +2113,7 @@ class FletOblikApp:
         inventory_digits_field = self._settings_field(
             "inventory_digits", "Кількість цифр у номері", "Наприклад: 6"
         )
-        inventory_preview = ft.Text(
+        inventory_preview = selectable_text(
             "",
             size=14,
             weight=ft.FontWeight.W_600,
@@ -2142,7 +2148,7 @@ class FletOblikApp:
                 inventory_next_field,
                 inventory_digits_field,
                 inventory_preview,
-                ft.Text(
+                selectable_text(
                     "Наприклад: префікс ОВТ-, номер 25, 6 цифр → ОВТ-000025.",
                     size=12,
                     color=ft.Colors.BLUE_GREY_600,
@@ -2161,7 +2167,7 @@ class FletOblikApp:
 
         self.commission_member_entries = []
         commission_members_host = ft.Column(spacing=10)
-        commission_count = ft.Text(
+        commission_count = selectable_text(
             "Членів комісії: 0",
             size=12,
             color=ft.Colors.BLUE_GREY_600,
@@ -2189,7 +2195,7 @@ class FletOblikApp:
                 value=str(member.get("name", "") or ""),
                 expand=2,
             )
-            title = ft.Text(
+            title = selectable_text(
                 "Член комісії",
                 weight=ft.FontWeight.W_600,
                 color=ft.Colors.BLUE_GREY_700,
@@ -2250,7 +2256,7 @@ class FletOblikApp:
             "Комісія",
             "Голова комісії та довільна кількість членів. Склад комісії можна змінювати без обмеження кількості.",
             [
-                ft.Text(
+                selectable_text(
                     "Голова комісії",
                     weight=ft.FontWeight.BOLD,
                     color=ft.Colors.BLUE_GREY_800,
@@ -2263,7 +2269,7 @@ class FletOblikApp:
                     controls=[
                         ft.Column(
                             controls=[
-                                ft.Text(
+                                selectable_text(
                                     "Члени комісії",
                                     weight=ft.FontWeight.BOLD,
                                 ),
@@ -2328,7 +2334,7 @@ class FletOblikApp:
                             width=900,
                             content=ft.Column(
                                 controls=[
-                        ft.Text(
+                        selectable_text(
                             "Ці реквізити зберігаються локально на цьому комп'ютері та не записуються в Excel автоматично.",
                             color=ft.Colors.BLUE_GREY_700,
                         ),
@@ -2414,7 +2420,7 @@ class FletOblikApp:
             self.table_host.controls.append(
                 ft.Container(
                     padding=30,
-                    content=ft.Text(
+                    content=selectable_text(
                         "Відкрийте Excel-файл або створіть нову книгу.",
                         color=ft.Colors.BLUE_GREY_600,
                     ),
@@ -2463,7 +2469,7 @@ class FletOblikApp:
                     label=ft.Container(
                         width=summary_column_width(header),
                         padding=4,
-                        content=ft.Text(
+                        content=selectable_text(
                             label,
                             size=12,
                             weight=ft.FontWeight.BOLD,
@@ -2506,7 +2512,7 @@ class FletOblikApp:
                         ft.Container(
                             width=summary_column_width(header),
                             padding=4,
-                            content=ft.Text(
+                            content=selectable_text(
                                 cell_text,
                                 size=12,
                                 max_lines=4 if header == "Примітка" else 3,
@@ -2544,7 +2550,7 @@ class FletOblikApp:
         self.table_host.controls.extend([
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
-                content=ft.Text(
+                content=selectable_text(
                     "«Зведений» формується з двох джерел: «Штат» задає "
                     "штатні позиції та штатну кількість, а «Поточний стан» — "
                     "фактичний облік і технічний стан. Штатна позиція "
@@ -2681,7 +2687,7 @@ class FletOblikApp:
                     spacing=4,
                     controls=[
                         ft.Icon(ft.Icons.MORE_HORIZ, size=16, color=UI_FOREST_ACTIVE),
-                        ft.Text(
+                        selectable_text(
                             "Дія",
                             size=12,
                             weight=ft.FontWeight.W_600,
@@ -3034,7 +3040,7 @@ class FletOblikApp:
             self.table_host.controls.append(
                 ft.Container(
                     padding=30,
-                    content=ft.Text(
+                    content=selectable_text(
                         "Відкрийте Excel-файл або створіть нову книгу.",
                         color=ft.Colors.BLUE_GREY_600,
                     ),
@@ -3083,7 +3089,7 @@ class FletOblikApp:
                 border=ft.Border(
                     bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
                 ),
-                content=ft.Text(
+                content=selectable_text(
                     header,
                     size=11,
                     weight=ft.FontWeight.BOLD,
@@ -3215,7 +3221,7 @@ class FletOblikApp:
                     border=ft.Border(
                         bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_100),
                     ),
-                    content=ft.Text(
+                    content=selectable_text(
                         display_value(value),
                         size=12,
                         max_lines=None,
@@ -3348,7 +3354,7 @@ class FletOblikApp:
         self.table_host.controls.extend([
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
-                content=ft.Text(
+                content=selectable_text(
                     "Ліва таблиця — узагальнений штат військової частини. "
                     "Права — деталізація по підрозділах. "
                     "Тягніть праву межу заголовка для ширини колонки; "
@@ -3402,7 +3408,7 @@ class FletOblikApp:
             self.table_host.controls.append(
                 ft.Container(
                     padding=30,
-                    content=ft.Text(
+                    content=selectable_text(
                         "Відкрийте Excel-файл або створіть нову книгу.",
                         color=ft.Colors.BLUE_GREY_600,
                     ),
@@ -3485,7 +3491,7 @@ class FletOblikApp:
                             width=165,
                             padding=4,
                             on_hover=lambda e, row_id=excel_row: self._hover_row(row_id, e),
-                            content=ft.Text(
+                            content=selectable_text(
                                 cell_text,
                                 size=12,
                                 color=text_color,
@@ -3516,7 +3522,7 @@ class FletOblikApp:
                     ft.DataColumn(
                         label=ft.Container(
                             width=105,
-                            content=ft.Text(""),
+                            content=selectable_text(""),
                         )
                     )
                 )
@@ -3526,7 +3532,7 @@ class FletOblikApp:
                     label=ft.Container(
                         width=165,
                         padding=4,
-                        content=ft.Text(
+                        content=selectable_text(
                             header.replace("\n", " "),
                             size=12,
                             weight=ft.FontWeight.BOLD,
@@ -3690,17 +3696,17 @@ class FletOblikApp:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Перемістити майно"),
+            title=selectable_text("Перемістити майно"),
             content=ft.Container(
                 width=700,
                 content=ft.Column(
                     tight=True,
                     controls=[
-                        ft.Text(
+                        selectable_text(
                             f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
                             weight=ft.FontWeight.BOLD,
                         ),
-                        ft.Text(
+                        selectable_text(
                             "Звідки: "
                             + (" / ".join(x for x in [from_brigade, from_subunit] if x) or "не вказано"),
                             color=ft.Colors.BLUE_GREY_700,
@@ -3758,13 +3764,13 @@ class FletOblikApp:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Списати майно"),
+            title=selectable_text("Списати майно"),
             content=ft.Container(
                 width=720,
                 content=ft.Column(
                     tight=True,
                     controls=[
-                        ft.Text(
+                        selectable_text(
                             f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
                             weight=ft.FontWeight.BOLD,
                         ),
@@ -3821,13 +3827,13 @@ class FletOblikApp:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Змінити стан майна"),
+            title=selectable_text("Змінити стан майна"),
             content=ft.Container(
                 width=620,
                 content=ft.Column(
                     tight=True,
                     controls=[
-                        ft.Text(
+                        selectable_text(
                             f"Транзакція: {display_value(base.get(TRANSACTION_ID_HEADER))}",
                             weight=ft.FontWeight.BOLD,
                         ),
@@ -3887,13 +3893,13 @@ class FletOblikApp:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(operation_type),
+            title=selectable_text(operation_type),
             content=ft.Container(
                 width=650,
                 content=ft.Column(
                     tight=True,
                     controls=[
-                        ft.Text(
+                        selectable_text(
                             "Кількісний залишок запасів ще не агрегується автоматично; "
                             "ця дія вже створює окрему транзакцію руху.",
                             color=ft.Colors.ORANGE_800,
@@ -3986,27 +3992,27 @@ class FletOblikApp:
                         controls=[
                             ft.Row(
                                 controls=[
-                                    ft.Text(
+                                    selectable_text(
                                         display_value(row.get(TRANSACTION_ID_HEADER)),
                                         weight=ft.FontWeight.BOLD,
                                     ),
-                                    ft.Text(
+                                    selectable_text(
                                         display_value(row.get(OPERATION_TYPE_HEADER)) or "Запис",
                                         color=ft.Colors.BLUE_700,
                                     ),
                                     ft.Container(expand=True),
-                                    ft.Text(event_date(row), color=ft.Colors.BLUE_GREY_600),
+                                    selectable_text(event_date(row), color=ft.Colors.BLUE_GREY_600),
                                 ]
                             ),
-                            ft.Text(
+                            selectable_text(
                                 f"Документ: {document or '—'} | "
                                 f"Кількість: {display_value(row.get(MAIN_HEADERS[16])) or '—'}"
                             ),
-                            ft.Text(
+                            selectable_text(
                                 f"Місце: {location or '—'} | "
                                 f"Стан: {display_value(row.get(MAIN_HEADERS[23])) or '—'}"
                             ),
-                            ft.Text(
+                            selectable_text(
                                 display_value(row.get("Примітка")),
                                 color=ft.Colors.BLUE_GREY_700,
                             ) if display_value(row.get("Примітка")).strip() else ft.Container(),
@@ -4017,7 +4023,7 @@ class FletOblikApp:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(
+            title=selectable_text(
                 "Історія: "
                 + (
                     display_value(base.get(MAIN_HEADERS[9]))
@@ -4030,7 +4036,7 @@ class FletOblikApp:
                 width=900,
                 height=560,
                 content=ft.Column(
-                    controls=cards or [ft.Text("Історію не знайдено.")],
+                    controls=cards or [selectable_text("Історію не знайдено.")],
                     scroll=ft.ScrollMode.AUTO,
                     spacing=8,
                 ),
@@ -4118,7 +4124,7 @@ class FletOblikApp:
             value=display_value(values.get("Ціна")),
             on_change=lambda e: refresh_calculation(),
         )
-        price_label = ft.Text(
+        price_label = selectable_text(
             "—",
             size=16,
             weight=ft.FontWeight.W_600,
@@ -4131,7 +4137,7 @@ class FletOblikApp:
             visible=False,
         )
 
-        sum_label = ft.Text(
+        sum_label = selectable_text(
             "—",
             size=16,
             weight=ft.FontWeight.W_600,
@@ -4151,7 +4157,7 @@ class FletOblikApp:
         mode_button = ft.Button(
             content="⟳  Розрахунок від суми",
         )
-        warning_text = ft.Text(
+        warning_text = selectable_text(
             "",
             color=ft.Colors.ORANGE_900,
             weight=ft.FontWeight.W_600,
@@ -4253,7 +4259,7 @@ class FletOblikApp:
         form_rows = [
             ft.Container(
                 padding=ft.Padding.only(bottom=8),
-                content=ft.Text(
+                content=selectable_text(
                     (
                         "ID транзакції: "
                         + str(values.get(TRANSACTION_ID_HEADER) or "")
@@ -4268,7 +4274,7 @@ class FletOblikApp:
         display_headers = self._display_headers_for_form(headers)
         for header in display_headers:
             current = values.get(header)
-            label = ft.Text(
+            label = selectable_text(
                 header.replace("\n", " "),
                 size=12,
                 weight=ft.FontWeight.W_600,
@@ -4471,7 +4477,7 @@ class FletOblikApp:
         )
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(
+            title=selectable_text(
                 "Редагувати запис" if excel_row is not None else "Додати запис"
             ),
             content=ft.Container(
@@ -4532,10 +4538,10 @@ class FletOblikApp:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Видалити запис?"),
+            title=selectable_text("Видалити запис?"),
             content=ft.Column(
                 controls=[
-                    ft.Text(
+                    selectable_text(
                         "Запис буде прибрано з таблиці, але інформація про "
                         "видалення залишиться у 'Контроль змін'."
                     ),
