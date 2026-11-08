@@ -37,8 +37,13 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 import flet_datatable2 as fdt
 
+try:
+    from .invoices import INVOICE_SHEET, REGISTRY_HEADERS, create_invoice_template, read_invoice
+except ImportError:  # Запуск `flet pack src/main.py` виконує файл як сценарій.
+    from invoices import INVOICE_SHEET, REGISTRY_HEADERS, create_invoice_template, read_invoice
+
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.17"
+APP_VERSION = "0.3.0"
 
 # Єдина палітра робочого інтерфейсу: стриманий темний навігаційний блок
 # та світла поверхня для великих облікових таблиць.
@@ -57,6 +62,7 @@ SHEET_CURRENT = "Поточний стан"
 SHEET_SUMMARY = "Зведений"
 SHEET_CHANGES = "Контроль змін"
 REQUIRED_SHEETS = [SHEET_STAFF, SHEET_MOVEMENT, SHEET_CURRENT, SHEET_SUMMARY, SHEET_CHANGES]
+NAV_SHEETS = [SHEET_MOVEMENT, SHEET_CURRENT, INVOICE_SHEET, SHEET_STAFF, SHEET_SUMMARY, SHEET_CHANGES]
 SETTINGS_VIEW = "Налаштування"
 TRANSACTION_ID_HEADER = "ID транзакції"
 OPERATION_TYPE_HEADER = "Тип операції"
@@ -473,6 +479,8 @@ class OblikWorkbook:
         self._style_header(ws_changes, 1, len(CHANGE_HEADERS))
         ws_changes.freeze_panes = "A2"
 
+        self._ensure_invoice_sheet_schema(wb)
+
         wb.save(path)
         self.load(path)
 
@@ -580,6 +588,8 @@ class OblikWorkbook:
             migrated = True
         if self._ensure_change_sheet_schema(self.wb[SHEET_CHANGES]):
             migrated = True
+        if self._ensure_invoice_sheet_schema(self.wb):
+            migrated = True
         if self._ensure_transaction_ids():
             migrated = True
         if self._ensure_operation_types():
@@ -605,6 +615,83 @@ class OblikWorkbook:
         if changed:
             ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}1"
         return changed
+
+    def _ensure_invoice_sheet_schema(self, wb: Workbook) -> bool:
+        """Додає реєстр до старої книги без зміни її наявних аркушів."""
+        if INVOICE_SHEET in wb.sheetnames:
+            headers = [wb[INVOICE_SHEET].cell(1, i).value for i in range(1, len(REGISTRY_HEADERS) + 1)]
+            if headers != REGISTRY_HEADERS:
+                raise ValueError("Аркуш «Накладні» має несумісні заголовки.")
+            return False
+        ws = wb.create_sheet(INVOICE_SHEET)
+        for col, header in enumerate(REGISTRY_HEADERS, 1):
+            ws.cell(1, col, header)
+            ws.column_dimensions[get_column_letter(col)].width = 34 if col == 8 else 20
+        self._style_header(ws, 1, len(REGISTRY_HEADERS))
+        ws.freeze_panes = "F2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(REGISTRY_HEADERS))}1"
+        return True
+
+    def import_invoice(self, path: Path) -> int:
+        """Однією операцією пов'язує позиції накладної з рухом майна."""
+        if self.wb is None:
+            raise RuntimeError("Спочатку відкрийте або створіть книгу обліку.")
+        invoice = read_invoice(path)
+        ws = self.wb[INVOICE_SHEET]
+        document_key = (norm(invoice.number), invoice.invoice_date)
+        for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
+            recorded_date = row[1].date() if isinstance(row[1], datetime) else row[1]
+            if (norm(row[0]), recorded_date) == document_key:
+                raise ValueError("Цю накладну з таким номером і датою вже внесено.")
+
+        # Спочатку перевірено весь файл; резервна копія пам'яті дає змогу
+        # відкотити всі пов'язані аркуші при помилці запису будь-якої позиції.
+        snapshot = deepcopy(self.wb)
+        was_dirty = self.dirty
+        try:
+            for item in invoice.items:
+                values = {header: None for header in MAIN_HEADERS}
+                values.update({
+                    MAIN_HEADERS[3]: invoice.number,
+                    MAIN_HEADERS[4]: invoice.invoice_date,
+                    MAIN_HEADERS[5]: invoice.arrival_method,
+                    MAIN_HEADERS[7]: item.code,
+                    MAIN_HEADERS[8]: item.asset_type,
+                    MAIN_HEADERS[9]: item.inventory_number or None,
+                    MAIN_HEADERS[10]: item.name,
+                    MAIN_HEADERS[11]: item.name,
+                    MAIN_HEADERS[12]: item.name,
+                    MAIN_HEADERS[15]: float(item.price),
+                    MAIN_HEADERS[16]: float(item.quantity),
+                    MAIN_HEADERS[18]: item.serial_number or None,
+                    MAIN_HEADERS[19]: item.brigade or "Склад",
+                    MAIN_HEADERS[20]: item.battalion or None,
+                    MAIN_HEADERS[21]: invoice.number,
+                    MAIN_HEADERS[22]: invoice.invoice_date,
+                    MAIN_HEADERS[23]: "Справний",
+                    MAIN_HEADERS[33]: item.note or None,
+                    OPERATION_TYPE_HEADER: "Оприбуткування за накладною",
+                })
+                movement_row = self.append_record(SHEET_MOVEMENT, values,
+                                                  reason=f"Накладна № {invoice.number}")
+                movement_ws = self.wb[SHEET_MOVEMENT]
+                tx_col = self.headers(SHEET_MOVEMENT).index(TRANSACTION_ID_HEADER) + 1
+                transaction_id = movement_ws.cell(movement_row, tx_col).value
+                registry = [
+                    invoice.number, invoice.invoice_date, invoice.arrival_method,
+                    invoice.supplier, invoice.recipient, item.line, item.code,
+                    item.name, item.unit, item.asset_type, float(item.quantity),
+                    float(item.price), float(item.quantity * item.price),
+                    item.inventory_number, item.serial_number, item.brigade,
+                    item.battalion, item.note, transaction_id,
+                ]
+                ws.append(registry)
+            self.dirty = True
+        except Exception:
+            self.wb = snapshot
+            self.dirty = was_dirty
+            raise
+        return len(invoice.items)
 
     def _ensure_staff_sheet_schema(self, ws) -> bool:
         """Приводить аркуш «Штат» до двох таблиць A:E та G:M."""
@@ -1537,6 +1624,24 @@ class FletOblikApp:
             on_click=self._delete_record,
             disabled=True,
         )
+        self.btn_invoice_template = ft.Button(
+            content="Шаблон Excel",
+            icon=ft.Icons.DOWNLOAD,
+            on_click=self._create_invoice_template,
+            visible=False,
+        )
+        self.btn_invoice_import = ft.Button(
+            content="Завантажити накладну",
+            icon=ft.Icons.UPLOAD_FILE,
+            on_click=self._import_invoice,
+            visible=False,
+        )
+        self.btn_invoice_preview = ft.Button(
+            content="Переглянути",
+            icon=ft.Icons.VISIBILITY,
+            on_click=self._preview_selected_invoice,
+            visible=False,
+        )
 
         self.summary_group_dropdown = ft.Dropdown(
             label="Групувати за",
@@ -1695,11 +1800,12 @@ class FletOblikApp:
         nav_icons = {
             SHEET_MOVEMENT: ft.Icons.SWAP_HORIZ,
             SHEET_CURRENT: ft.Icons.INVENTORY_2_OUTLINED,
+            INVOICE_SHEET: ft.Icons.RECEIPT_LONG,
             SHEET_STAFF: ft.Icons.TABLE_ROWS_OUTLINED,
             SHEET_SUMMARY: ft.Icons.BAR_CHART,
             SHEET_CHANGES: ft.Icons.HISTORY,
         }
-        for sheet in REQUIRED_SHEETS:
+        for sheet in NAV_SHEETS:
             button = ft.Button(
                 # Кнопка Flet центрує пару icon+content за замовчуванням.
                 # Власний Row розтягується на ширину кнопки, щоб усі
@@ -1797,6 +1903,9 @@ class FletOblikApp:
                 self.search,
                 self.summary_group_dropdown,
                 self.btn_summary_refresh,
+                self.btn_invoice_template,
+                self.btn_invoice_import,
+                self.btn_invoice_preview,
                 self.btn_add,
             ],
             spacing=8,
@@ -2011,6 +2120,77 @@ class FletOblikApp:
     def _search_changed(self, e=None):
         self.selected_excel_row = None
         self._refresh_table()
+
+    async def _create_invoice_template(self, e=None):
+        try:
+            path = await self.file_picker.save_file(
+                dialog_title="Зберегти шаблон накладної",
+                file_name="Накладна_Oblik.xlsx",
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx"],
+            )
+            if path:
+                target = Path(path if path.lower().endswith(".xlsx") else path + ".xlsx")
+                create_invoice_template(target)
+                self._set_status(f"Створено шаблон: {target}")
+        except Exception as exc:
+            self._show_message("Помилка створення накладної", str(exc))
+
+    async def _import_invoice(self, e=None):
+        if self.model.wb is None:
+            self._show_message("Накладна", "Спочатку відкрийте книгу обліку.")
+            return
+        try:
+            files = await self.file_picker.pick_files(
+                dialog_title="Виберіть заповнену накладну Oblik",
+                allow_multiple=False,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx"],
+            )
+            if not files:
+                return
+            if not files[0].path:
+                raise ValueError("Не вдалося отримати шлях до файлу накладної.")
+            count = self.model.import_invoice(Path(files[0].path))
+            self.model.save()
+            self.current_sheet = INVOICE_SHEET
+            self.selected_excel_row = None
+            self._refresh_table()
+            self._set_status(f"Накладну внесено: {count} позицій. Книгу збережено.")
+        except Exception as exc:
+            self._show_message("Накладну не завантажено", str(exc))
+
+    def _preview_selected_invoice(self, e=None):
+        if self.model.wb is None or self.selected_excel_row is None:
+            self._show_message("Перегляд накладної", "Виберіть рядок накладної в таблиці.")
+            return
+        ws = self.model.wb[INVOICE_SHEET]
+        number = ws.cell(self.selected_excel_row, 1).value
+        date_value = ws.cell(self.selected_excel_row, 2).value
+        if not number:
+            return
+        rows = [
+            [ws.cell(row, col).value for col in range(1, len(REGISTRY_HEADERS) + 1)]
+            for row in range(2, ws.max_row + 1)
+            if norm(ws.cell(row, 1).value) == norm(number)
+            and ws.cell(row, 2).value == date_value
+        ]
+        details = [
+            selectable_text(f"Дата: {display_value(date_value)}   ·   Спосіб надходження: {rows[0][2]}"),
+            selectable_text(f"Постачальник: {rows[0][3] or '—'}   ·   Одержувач: {rows[0][4] or '—'}"),
+            ft.Divider(),
+        ]
+        for line in rows:
+            details.append(selectable_text(
+                f"{line[5]}. {line[7]}  ·  {line[10]} {line[8]} × {line[11]} = {line[12]}  ·  {line[18]}",
+                size=13,
+            ))
+        self.page.show_dialog(ft.AlertDialog(
+            title=selectable_text(f"Накладна № {number}"),
+            content=ft.Container(width=760, height=400,
+                                 content=ft.Column(controls=details, scroll=ft.ScrollMode.AUTO)),
+            actions=[ft.TextButton("Закрити", on_click=lambda evt: self.page.pop_dialog())],
+        ))
 
     def _settings_field(self, key: str, label: str, hint: str = "") -> ft.TextField:
         field = ft.TextField(
@@ -3378,6 +3558,10 @@ class FletOblikApp:
 
     def _refresh_table(self):
         self._update_dashboard_metrics()
+        invoice_view = self.current_sheet == INVOICE_SHEET
+        self.btn_invoice_template.visible = invoice_view
+        self.btn_invoice_import.visible = invoice_view
+        self.btn_invoice_preview.visible = invoice_view
         if self.current_sheet == SETTINGS_VIEW:
             self._render_settings()
             return
