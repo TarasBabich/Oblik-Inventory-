@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from openpyxl import load_workbook
 
 from src.invoices import INVOICE_SHEET, create_invoice_template
-from src.main import MAIN_HEADERS, OPERATION_TYPE_HEADER, SHEET_MOVEMENT, OblikWorkbook
+from src.main import MAIN_HEADERS, OPERATION_TYPE_HEADER, SHEET_CURRENT, SHEET_MOVEMENT, OblikWorkbook
 
 
 def main():
@@ -46,6 +46,7 @@ def main():
         assert registry.iloc[0]["ID транзакції"] == movement.iloc[0]["ID транзакції"]
         assert movement.iloc[1][MAIN_HEADERS[9]] is None  # запас без інвентарного №
         assert movement.iloc[1][OPERATION_TYPE_HEADER] == "Оприбуткування за накладною"
+        assert len(model.dataframe(SHEET_CURRENT)) == 1
         try:
             model.import_invoice(invoice_path)
             raise AssertionError("Повторне завантаження повинно відхилятися")
