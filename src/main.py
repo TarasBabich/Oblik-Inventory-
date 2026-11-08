@@ -686,6 +686,10 @@ class OblikWorkbook:
                     item.battalion, item.note, transaction_id,
                 ]
                 ws.append(registry)
+            # Для поштучного майна оновлюємо фактичний стан у тій самій
+            # транзакції імпорту; запаси без ідентифікатора залишаються
+            # в реєстрі й русі до впровадження кількісного залишку.
+            self.rebuild_current_state()
             self.dirty = True
         except Exception:
             self.wb = snapshot
