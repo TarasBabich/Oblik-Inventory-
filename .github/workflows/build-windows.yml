@@ -21,6 +21,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install "flet-cli==1.1.2" "flet-desktop==1.1.2"
+
+      - name: Patch Flet pack Windows bug
+        run: |
+          python tools/patch_flet_pack.py
 
       - name: Smoke test core logic
         run: |
