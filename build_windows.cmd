@@ -23,6 +23,10 @@ if not exist ".venv\Scripts\python.exe" (
 if errorlevel 1 goto :error
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto :error
+".venv\Scripts\python.exe" -m pip install "flet-cli==1.1.2" "flet-desktop==1.1.2"
+if errorlevel 1 goto :error
+".venv\Scripts\python.exe" tools\patch_flet_pack.py
+if errorlevel 1 goto :error
 
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
@@ -32,8 +36,8 @@ if exist dist rmdir /s /q dist
   --name Oblik ^
   --distpath dist ^
   --product-name "Oblik Inventory" ^
-  --product-version 0.2.17 ^
-  --file-version 0.2.17.0 ^
+  --product-version 0.3.0 ^
+  --file-version 0.3.0.0 ^
   src\main.py
 if errorlevel 1 goto :error
 

@@ -6,8 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.main import (OblikWorkbook, MAIN_HEADERS, SHEET_CURRENT, SHEET_MOVEMENT, SHEET_CHANGES, display_value, calculate_total, calculate_unit_price, AppSettingsStore, format_inventory_number, next_inventory_number, TRANSACTION_ID_HEADER, OPERATION_TYPE_HEADER, generate_transaction_id, format_transaction_id, parse_transaction_sequence, SUMMARY_GROUP_FIELDS, SUMMARY_OUTPUT_HEADERS, SHEET_SUMMARY, SHEET_STAFF, STAFF_HEADERS, staff_ui_numbered_values, estimate_staff_row_height, STAFF_MIN_COLUMN_WIDTH, STAFF_MAX_COLUMN_WIDTH, STAFF_MIN_ROW_HEIGHT, STAFF_MAX_ROW_HEIGHT)
 import pandas as pd
+from openpyxl import load_workbook
 import flet as ft
 import flet_datatable2 as fdt
+from src.invoices import (
+    INVOICE_INTERNAL, InvoiceData, InvoiceItem, SHEET_TRANSFER_REGISTER,
+    append_transfer_records, ensure_invoice_sheets, generate_invoice_file,
+)
 
 
 def record(inv, serial, order, order_date, act, act_date, location, qty=1):
@@ -219,6 +224,41 @@ def main():
 
         model = OblikWorkbook()
         model.create_new(path)
+        assert SHEET_TRANSFER_REGISTER in model.wb.sheetnames
+
+        invoice_path = Path(tmp) / "invoice.xlsx"
+        invoice = InvoiceData(
+            invoice_type=INVOICE_INTERNAL,
+            number="ТЕСТ-1",
+            sender_unit_name="Військова частина А1234",
+            sender_edrpou="12345678",
+            sender="Начальник складу",
+            receiver="Командир підрозділу",
+            items=[
+                InvoiceItem(
+                    name="Майно без заводського номера",
+                    serial_number="",
+                    nomenclature_code="NOM-1",
+                    unit="к-т.",
+                    price=100,
+                    quantity_sent=2,
+                    quantity_received=2,
+                )
+            ],
+        )
+        generate_invoice_file(invoice_path, invoice, loaded_settings)
+        assert invoice_path.exists()
+        invoice_wb = load_workbook(invoice_path)
+        invoice_ws = invoice_wb["Накладна (вимога)"]
+        assert invoice_ws["B25"].value == "Майно без заводського номера"
+        assert invoice_ws["B26"].value is None
+        assert invoice_ws["I25"].value == 200
+        ensure_invoice_sheets(model.wb, loaded_settings)
+        added = append_transfer_records(model.wb[SHEET_TRANSFER_REGISTER], invoice, invoice_path)
+        assert added == 1
+        register_ws = model.wb[SHEET_TRANSFER_REGISTER]
+        assert register_ws["B2"].value == "Майно без заводського номера"
+        assert register_ws["C2"].value is None
 
         r1 = record("INV-001", "SN-001", "Н-1", "01.01.2024", "А-1", "02.01.2024", "РРЕБ")
         r2 = record("INV-001", "SN-001", "Н-2", "01.02.2024", "А-2", "02.02.2024", "1 МБ")

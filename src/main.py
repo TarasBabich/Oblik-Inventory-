@@ -36,8 +36,21 @@ from openpyxl.utils import get_column_letter
 import flet as ft
 import flet_datatable2 as fdt
 
+try:
+    from src.invoices import (
+        INVOICE_EXTERNAL, INVOICE_INTERNAL, InvoiceData, InvoiceItem,
+        SHEET_TRANSFER_REGISTER, append_transfer_records,
+        ensure_invoice_sheets, generate_invoice_file, parse_invoice_date,
+    )
+except ModuleNotFoundError:  # запуск безпосередньо: python src/main.py
+    from invoices import (
+        INVOICE_EXTERNAL, INVOICE_INTERNAL, InvoiceData, InvoiceItem,
+        SHEET_TRANSFER_REGISTER, append_transfer_records,
+        ensure_invoice_sheets, generate_invoice_file, parse_invoice_date,
+    )
+
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.2.17"
+APP_VERSION = "0.3.0"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -46,12 +59,14 @@ SHEET_SUMMARY = "Зведений"
 SHEET_CHANGES = "Контроль змін"
 REQUIRED_SHEETS = [SHEET_STAFF, SHEET_MOVEMENT, SHEET_CURRENT, SHEET_SUMMARY, SHEET_CHANGES]
 SETTINGS_VIEW = "Налаштування"
+INVOICES_VIEW = "Накладні"
 TRANSACTION_ID_HEADER = "ID транзакції"
 OPERATION_TYPE_HEADER = "Тип операції"
 
 DEFAULT_APP_SETTINGS = {
     "unit_number": "",
     "unit_name": "",
+    "unit_edrpou": "",
     "commander_position": "Командир військової частини",
     "commander_rank": "",
     "commander_name": "",
@@ -460,6 +475,8 @@ class OblikWorkbook:
         self._style_header(ws_changes, 1, len(CHANGE_HEADERS))
         ws_changes.freeze_panes = "A2"
 
+        ensure_invoice_sheets(wb)
+
         wb.save(path)
         self.load(path)
 
@@ -570,6 +587,8 @@ class OblikWorkbook:
         if self._ensure_transaction_ids():
             migrated = True
         if self._ensure_operation_types():
+            migrated = True
+        if ensure_invoice_sheets(self.wb):
             migrated = True
 
         self.path = path
@@ -1454,6 +1473,7 @@ class FletOblikApp:
         self.settings = self.settings_store.load()
         self.settings_fields: dict[str, ft.TextField] = {}
         self.commission_member_entries: list[dict[str, Any]] = []
+        self.invoice_item_entries: list[dict[str, Any]] = []
         self.summary_group_mode = "Узагальнена назва"
         self.hovered_excel_row: Optional[int] = None
         self.row_action_controls: dict[int, ft.Container] = {}
@@ -1662,6 +1682,13 @@ class FletOblikApp:
 
         nav_controls.extend([
             ft.Divider(),
+            ft.Button(
+                content="Накладні",
+                icon=ft.Icons.RECEIPT_LONG,
+                data=INVOICES_VIEW,
+                on_click=self._select_sheet,
+                width=205,
+            ),
             ft.Button(
                 content="Налаштування",
                 icon=ft.Icons.SETTINGS,
@@ -1908,6 +1935,7 @@ class FletOblikApp:
             [
                 self._settings_field("unit_number", "Номер військової частини", "Наприклад: А0000"),
                 self._settings_field("unit_name", "Найменування військової частини"),
+                self._settings_field("unit_edrpou", "Код згідно з ЄДРПОУ"),
             ],
         )
 
@@ -2216,6 +2244,244 @@ class FletOblikApp:
             )
         ])
         self.status.value = f"Налаштування: {self.settings_store.path}"
+        self.page.update()
+
+    def _render_invoices(self):
+        """Форма створення накладної (вимоги) та реєстрації переміщення."""
+        self.table_host.controls.clear()
+        self.search.visible = False
+        self.btn_add.visible = False
+        self.btn_edit.visible = False
+        self.btn_delete.visible = False
+        self.action_menu.visible = False
+        self.summary_group_dropdown.visible = False
+        self.btn_summary_refresh.visible = False
+        self.sheet_title.value = INVOICES_VIEW
+        self.file_label.value = (
+            str(self.model.path) if self.model.path else "Спочатку відкрийте або створіть книгу обліку"
+        )
+
+        invoice_type = ft.Dropdown(
+            label="Тип накладної",
+            value=INVOICE_INTERNAL,
+            options=[
+                ft.DropdownOption(key=INVOICE_INTERNAL, text="Між підрозділами військової частини"),
+                ft.DropdownOption(key=INVOICE_EXTERNAL, text="Між військовими частинами"),
+            ],
+        )
+        number = ft.TextField(label="Номер накладної", hint_text="Наприклад: 1877/408/ім")
+        today = datetime.now().strftime("%d.%m.%Y")
+        issue_date = ft.TextField(label="Дата складання", value=today, hint_text="дд.мм.рррр")
+        operation_date = ft.TextField(label="Дата операції", value=today, hint_text="дд.мм.рррр")
+        valid_until = ft.TextField(label="Дійсна до", hint_text="дд.мм.рррр (необов’язково)")
+        place = ft.TextField(label="Місце складання")
+        service_name = ft.TextField(label="Служба забезпечення", value=self.settings.get("service_name", ""))
+        basis = ft.TextField(label="Підстава (мета)", multiline=True, min_lines=1, max_lines=3)
+        responsible = ft.TextField(label="Відповідальний одержувач")
+        sender = ft.TextField(label="Передає")
+        receiver = ft.TextField(label="Приймає")
+
+        from_brigade = ft.TextField(label="З якого окремого підрозділу бригади")
+        from_battalion = ft.TextField(label="З якого підрозділу батальйону/дивізіону")
+        to_brigade = ft.TextField(label="До якого окремого підрозділу бригади")
+        to_battalion = ft.TextField(label="До якого підрозділу батальйону/дивізіону")
+        sender_unit = ft.TextField(
+            label="Військова частина-відправник",
+            value=self.settings.get("unit_name") or self.settings.get("unit_number", ""),
+        )
+        sender_edrpou = ft.TextField(label="ЄДРПОУ відправника", value=self.settings.get("unit_edrpou", ""))
+        receiver_unit = ft.TextField(label="Військова частина-одержувач")
+        receiver_edrpou = ft.TextField(label="ЄДРПОУ одержувача")
+
+        items_host = ft.Column(spacing=10)
+        self.invoice_item_entries = []
+
+        def renumber_items():
+            for index, entry in enumerate(self.invoice_item_entries, 1):
+                entry["title"].value = f"Позиція №{index}"
+
+        def add_item(e=None):
+            entry: dict[str, Any] = {}
+            title = ft.Text("Позиція", weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800)
+            name = ft.TextField(label="Найменування майна", expand=3)
+            serial = ft.TextField(
+                label="Заводський номер",
+                hint_text="Якщо номера немає — залиште порожнім",
+                expand=2,
+            )
+            code = ft.TextField(label="Код номенклатури", expand=2)
+            unit = ft.TextField(label="Од. виміру", expand=1)
+            category = ft.TextField(label="Категорія", expand=1)
+            price = ft.TextField(label="Ціна", value="0", expand=1)
+            qty_sent = ft.TextField(label="Відправлено", value="1", expand=1)
+            qty_received = ft.TextField(label="Прийнято", value="1", expand=1)
+            note = ft.TextField(label="Примітка", expand=2)
+
+            def remove_item(evt=None):
+                if len(self.invoice_item_entries) <= 1:
+                    self._show_message("Позиції майна", "У накладній має залишатися хоча б одна позиція.")
+                    return
+                self.invoice_item_entries.remove(entry)
+                items_host.controls.remove(entry["container"])
+                renumber_items()
+                self.page.update()
+
+            container = ft.Container(
+                padding=12,
+                border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
+                border_radius=10,
+                bgcolor=ft.Colors.WHITE,
+                content=ft.Column(
+                    controls=[
+                        ft.Row(controls=[title, ft.Container(expand=True), ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Видалити позицію", on_click=remove_item)]),
+                        ft.Row(controls=[name, serial], spacing=8),
+                        ft.Row(controls=[code, unit, category], spacing=8),
+                        ft.Row(controls=[price, qty_sent, qty_received, note], spacing=8),
+                        ft.Text(
+                            "У Excel найменування буде у верхньому рядку, заводський номер — у нижньому. Якщо номера немає, нижній рядок залишиться повністю порожнім.",
+                            size=11,
+                            color=ft.Colors.BLUE_GREY_600,
+                        ),
+                    ],
+                    spacing=8,
+                ),
+            )
+            entry.update({
+                "title": title, "name": name, "serial": serial, "code": code,
+                "unit": unit, "category": category, "price": price,
+                "qty_sent": qty_sent, "qty_received": qty_received,
+                "note": note, "container": container,
+            })
+            self.invoice_item_entries.append(entry)
+            items_host.controls.append(container)
+            renumber_items()
+            if e is not None:
+                self.page.update()
+
+        add_item()
+
+        def number_value(value: Any, field_name: str) -> float:
+            text = str(value or "").strip().replace(" ", "").replace(",", ".")
+            if not text:
+                return 0.0
+            try:
+                return float(text)
+            except ValueError as exc:
+                raise ValueError(f"Поле «{field_name}» має містити число.") from exc
+
+        async def create_invoice(e=None):
+            if self.model.wb is None or self.model.path is None:
+                self._show_message("Накладні", "Спочатку відкрийте або створіть книгу обліку.")
+                return
+            try:
+                items = [
+                    InvoiceItem(
+                        name=entry["name"].value or "",
+                        serial_number=entry["serial"].value or "",
+                        nomenclature_code=entry["code"].value or "",
+                        unit=entry["unit"].value or "",
+                        category=entry["category"].value or "",
+                        price=number_value(entry["price"].value, "Ціна"),
+                        quantity_sent=number_value(entry["qty_sent"].value, "Відправлено"),
+                        quantity_received=number_value(entry["qty_received"].value, "Прийнято"),
+                        note=entry["note"].value or "",
+                    )
+                    for entry in self.invoice_item_entries
+                ]
+                data = InvoiceData(
+                    invoice_type=invoice_type.value or INVOICE_INTERNAL,
+                    number=number.value or "",
+                    issue_date=parse_invoice_date(issue_date.value),
+                    operation_date=parse_invoice_date(operation_date.value),
+                    valid_until=(parse_invoice_date(valid_until.value) if (valid_until.value or "").strip() else None),
+                    place=place.value or "",
+                    service_name=service_name.value or "",
+                    basis=basis.value or "",
+                    responsible_receiver=responsible.value or "",
+                    sender=sender.value or "",
+                    receiver=receiver.value or "",
+                    from_brigade_unit=from_brigade.value or "",
+                    from_battalion_unit=from_battalion.value or "",
+                    to_brigade_unit=to_brigade.value or "",
+                    to_battalion_unit=to_battalion.value or "",
+                    sender_unit_name=sender_unit.value or "",
+                    sender_edrpou=sender_edrpou.value or "",
+                    receiver_unit_name=receiver_unit.value or "",
+                    receiver_edrpou=receiver_edrpou.value or "",
+                    leader_position=self.settings.get("service_chief_position") or "Керівник (посадова особа, начальник служби)",
+                    leader_name=" ".join(filter(None, [self.settings.get("service_chief_rank", ""), self.settings.get("service_chief_name", "")])),
+                    items=items,
+                )
+                safe_no = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in data.number).strip("_") or "без_номера"
+                selected_path = await self.file_picker.save_file(
+                    dialog_title="Зберегти накладну",
+                    file_name=f"Накладна_{safe_no}_{data.issue_date.strftime('%d-%m-%Y')}.xlsx",
+                    file_type=ft.FilePickerFileType.CUSTOM,
+                    allowed_extensions=["xlsx"],
+                )
+                if not selected_path:
+                    return
+                output = generate_invoice_file(Path(selected_path), data, self.settings)
+                ensure_invoice_sheets(self.model.wb, self.settings)
+                added = append_transfer_records(self.model.wb[SHEET_TRANSFER_REGISTER], data, output)
+                self.model.dirty = True
+                self.model.save()
+                self._set_status(f"Створено накладну {data.number}; до реєстру додано рядків: {added}")
+                self._show_message(
+                    "Накладну створено",
+                    f"Файл: {output}\n\nДо «Списку переміщень» додано позицій: {added}.",
+                )
+            except PermissionError:
+                self._show_message("Файл зайнятий", "Закрийте книгу обліку або накладну в Excel і повторіть операцію.")
+            except Exception as exc:
+                self._show_message("Помилка створення накладної", str(exc))
+
+        document_card = self._settings_card(
+            "Реквізити накладної",
+            "Форма відповідає додатку 25 до Інструкції з обліку військового майна у ЗСУ.",
+            [
+                invoice_type,
+                ft.Row(controls=[number, issue_date, operation_date, valid_until], spacing=8),
+                ft.Row(controls=[place, service_name], spacing=8),
+                basis, responsible,
+                ft.Row(controls=[sender, receiver], spacing=8),
+            ],
+        )
+        route_card = self._settings_card(
+            "Маршрут переміщення",
+            "Поля використовуються в реєстрі переміщень і для передачі між військовими частинами.",
+            [
+                ft.Row(controls=[from_brigade, from_battalion], spacing=8),
+                ft.Row(controls=[to_brigade, to_battalion], spacing=8),
+                ft.Row(controls=[sender_unit, sender_edrpou], spacing=8),
+                ft.Row(controls=[receiver_unit, receiver_edrpou], spacing=8),
+            ],
+        )
+
+        self.table_host.controls.append(
+            ft.Container(
+                expand=True,
+                content=ft.Column(
+                    expand=True,
+                    scroll=ft.ScrollMode.AUTO,
+                    controls=[
+                        ft.Container(
+                            width=1100,
+                            content=ft.Column(
+                                controls=[
+                                    document_card, route_card,
+                                    ft.Row(controls=[ft.Text("Майно", size=18, weight=ft.FontWeight.BOLD), ft.Container(expand=True), ft.Button(content="+ Додати позицію", icon=ft.Icons.ADD, on_click=add_item)]),
+                                    items_host,
+                                    ft.Row(alignment=ft.MainAxisAlignment.END, controls=[ft.Button(content="Сформувати накладну Excel", icon=ft.Icons.DESCRIPTION, on_click=create_invoice)]),
+                                ],
+                                spacing=14,
+                            ),
+                        )
+                    ],
+                ),
+            )
+        )
+        self.status.value = "Накладні: формування Excel та автоматичний запис у реєстр"
         self.page.update()
 
     def _update_edit_permissions(self):
@@ -3120,6 +3386,9 @@ class FletOblikApp:
         self.page.update()
 
     def _refresh_table(self):
+        if self.current_sheet == INVOICES_VIEW:
+            self._render_invoices()
+            return
         if self.current_sheet == SETTINGS_VIEW:
             self._render_settings()
             return
