@@ -23,6 +23,10 @@ if not exist ".venv\Scripts\python.exe" (
 if errorlevel 1 goto :error
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto :error
+".venv\Scripts\python.exe" -m pip install "flet-cli==1.1.2" "flet-desktop==1.1.2"
+if errorlevel 1 goto :error
+".venv\Scripts\python.exe" tools\patch_flet_pack.py
+if errorlevel 1 goto :error
 
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
