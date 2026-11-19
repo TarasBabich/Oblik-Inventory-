@@ -261,6 +261,9 @@ def main():
         invoice_ws = invoice_wb["Накладна (вимога)"]
         assert invoice_ws["B23"].value == "Майно без заводського номера"
         assert invoice_ws["B24"].value is None
+        assert invoice_ws["A6"].value == "Військова частина А1234"
+        assert invoice_ws["A7"].value == "(номер військової частини)"
+        assert invoice_ws["D8"].value == "12345678"
         assert invoice_ws["I23"].value == 200
         assert invoice_ws["C20"].alignment.textRotation == 90
         assert invoice_ws["G21"].alignment.textRotation == 90
