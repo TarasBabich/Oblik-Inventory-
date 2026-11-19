@@ -2590,7 +2590,7 @@ class FletOblikApp:
                     ),
                 ),
                 ft.Row(
-                    alignment=ft.MainAxisAlignment.END,
+                    alignment=ft.MainAxisAlignment.START,
                     controls=[
                         ft.Button(
                             content="Додати позицію",
