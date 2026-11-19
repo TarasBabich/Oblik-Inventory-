@@ -208,9 +208,9 @@ def _style_invoice_sheet(ws, data: InvoiceData, settings: dict[str, Any]) -> Non
     merge("G2:J2", "до Інструкції з обліку військового майна")
     merge("G3:J3", "у Збройних Силах України")
     merge("G4:J4", "(пункт 24 розділу IV)")
-    unit_name = data.sender_unit_name or settings.get("unit_name") or settings.get("unit_number") or ""
-    merge("A6:F6", unit_name, 11, True, "center")
-    merge("A7:F7", "(найменування юридичної особи)", 8, False, "center")
+    unit_number = data.sender_unit_name or settings.get("unit_number") or ""
+    merge("A6:F6", unit_number, 11, True, "center")
+    merge("A7:F7", "(номер військової частини)", 8, False, "center")
     merge("A8:C8", "Код згідно з ЄДРПОУ")
     merge("D8:F8", data.sender_edrpou or settings.get("unit_edrpou", ""), 10, True, "center")
     merge("A9:F9", f"Дійсна до {_formal_date_text(data.valid_until)}")
