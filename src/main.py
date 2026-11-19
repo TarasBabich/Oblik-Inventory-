@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 50528)
-Total output lines: 4756
-
 # -*- coding: utf-8 -*-
 """
 Oblik Inventory
@@ -2349,7 +2346,48 @@ class FletOblikApp:
             entry: dict[str, Any] = {}
             title = ft.Text("", weight=ft.FontWeight.BOLD, width=32, text_align=ft.TextAlign.CENTER)
             name = ft.TextField(hint_text="Найменування майна", width=300, dense=True)
-         …528 tokens truncated…": title, "name": name, "serial": serial, "code": code,
+            serial = ft.TextField(
+                hint_text="Заводський номер (якщо є)",
+                width=300,
+                dense=True,
+            )
+            code = ft.TextField(hint_text="Код", width=135, dense=True)
+            unit = ft.TextField(hint_text="од.", width=75, dense=True)
+            category = ft.TextField(hint_text="кат.", width=75, dense=True)
+            price = ft.TextField(value="0", width=105, dense=True, on_change=recalculate_invoice_total)
+            qty_sent = ft.TextField(value="1", width=85, dense=True, on_change=recalculate_invoice_total)
+            qty_received = qty_sent
+            item_sum = ft.TextField(value="0,00", width=110, dense=True, read_only=True)
+            note = ft.TextField(visible=False)
+
+            def remove_item(evt=None):
+                if len(self.invoice_item_entries) <= 1:
+                    self._show_message("Позиції майна", "У накладній має залишатися хоча б одна позиція.")
+                    return
+                self.invoice_item_entries.remove(entry)
+                items_host.controls.remove(entry["container"])
+                renumber_items()
+                recalculate_invoice_total()
+                self.page.update()
+
+            container = ft.Container(
+                padding=ft.Padding.symmetric(horizontal=8, vertical=6),
+                border=ft.Border.only(bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_200)),
+                bgcolor=ft.Colors.WHITE,
+                content=ft.Row(
+                    controls=[
+                        title,
+                        ft.Column(controls=[name, serial], spacing=4),
+                        code, unit, category, price, qty_sent,
+                        item_sum,
+                        ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Видалити позицію", on_click=remove_item),
+                    ],
+                    spacing=6,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+            )
+            entry.update({
+                "title": title, "name": name, "serial": serial, "code": code,
                 "unit": unit, "category": category, "price": price,
                 "qty_sent": qty_sent, "qty_received": qty_received,
                 "sum": item_sum, "note": note, "container": container,
