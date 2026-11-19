@@ -50,7 +50,7 @@ except ModuleNotFoundError:  # запуск безпосередньо: python s
     )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.3.4"
+APP_VERSION = "0.3.5"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -2512,7 +2512,9 @@ class FletOblikApp:
             "Форма відповідає додатку 25 до Інструкції з обліку військового майна у ЗСУ.",
             [
                 invoice_type_switch,
-                ft.Row(controls=[sender_unit, sender_edrpou, valid_until], spacing=12),
+                ft.Row(controls=[sender_unit]),
+                ft.Row(controls=[sender_edrpou]),
+                ft.Row(controls=[valid_until]),
                 ft.Row(controls=[number, ft.Container(expand=True)], spacing=12),
                 ft.Row(controls=[operation_date, issue_date], spacing=12),
                 ft.Row(controls=[place, ft.Container(expand=True)], spacing=12),
@@ -2562,15 +2564,7 @@ class FletOblikApp:
             "Найменування записується у верхньому рядку Excel, заводський номер — у нижньому. Якщо номера немає, нижній рядок залишається порожнім.",
             [
                 ft.Row(
-                    controls=[
-                        invoice_item_count,
-                        ft.Container(expand=True),
-                        ft.Button(
-                            content="+ Додати позицію",
-                            icon=ft.Icons.ADD,
-                            on_click=add_item,
-                        ),
-                    ]
+                    controls=[invoice_item_count]
                 ),
                 ft.Container(
                     border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
@@ -2594,6 +2588,16 @@ class FletOblikApp:
                         ],
                         spacing=0,
                     ),
+                ),
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.END,
+                    controls=[
+                        ft.Button(
+                            content="Додати позицію",
+                            icon=ft.Icons.ADD,
+                            on_click=add_item,
+                        ),
+                    ],
                 ),
             ],
         )
