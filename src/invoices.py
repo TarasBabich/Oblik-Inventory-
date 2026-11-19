@@ -92,6 +92,16 @@ def _date_text(value: Optional[date]) -> str:
     return value.strftime("%d.%m.%Y") if value else ""
 
 
+def _formal_date_text(value: Optional[date]) -> str:
+    if not value:
+        return "«___» ____________ 20___ року"
+    months = [
+        "січня", "лютого", "березня", "квітня", "травня", "червня",
+        "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+    ]
+    return f"«{value.day:02d}» {months[value.month - 1]} {value.year} року"
+
+
 def _parse_date(value: Any) -> Optional[date]:
     if value in (None, ""):
         return None
@@ -180,7 +190,9 @@ def quantity_in_words(value: float) -> str:
 
 def _style_invoice_sheet(ws, data: InvoiceData, settings: dict[str, Any]) -> None:
     ws.title = "Накладна (вимога)"
-    widths = [5, 29, 13, 10, 10, 13, 13, 13, 14, 20]
+    # Пропорції відповідають бланку додатка 25: широка графа назви,
+    # вузькі вертикальні службові графи та компактна графа приміток.
+    widths = [5, 31, 8, 7, 7, 9, 8, 8, 11, 12]
     for idx, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(idx)].width = width
     ws.sheet_view.showGridLines = False
@@ -201,41 +213,50 @@ def _style_invoice_sheet(ws, data: InvoiceData, settings: dict[str, Any]) -> Non
     merge("A7:F7", "(найменування юридичної особи)", 8, False, "center")
     merge("A8:C8", "Код згідно з ЄДРПОУ")
     merge("D8:F8", data.sender_edrpou or settings.get("unit_edrpou", ""), 10, True, "center")
-    merge("A9:F9", f"Дійсна до {_date_text(data.valid_until)}")
+    merge("A9:F9", f"Дійсна до {_formal_date_text(data.valid_until)}")
     merge("A11:J11", f"НАКЛАДНА (ВИМОГА) № {data.number}", 14, True, "center")
     merge("A12:J12", data.place, 10, False, "center")
     merge("A13:J13", "(місце складання)", 8, False, "center")
-    merge("A14:J14", _date_text(data.issue_date), 10, False, "center")
+    merge("A14:J14", _formal_date_text(data.issue_date), 10, False, "center")
     merge("A15:J15", "(дата складання)", 8, False, "center")
-    merge("A17:E17", f"Дата операції: {_date_text(data.operation_date)}")
-    merge("F17:J17", f"Служба забезпечення: {data.service_name or settings.get('service_name', '')}")
-    merge("A18:E18", f"Вид операції: {data.invoice_type}")
-    merge("F18:J18", f"Підстава (мета): {data.basis}")
-    merge("A19:J19", f"Відповідальний одержувач: {data.responsible_receiver}")
-    merge("A20:E20", f"Передає: {data.sender}")
-    merge("F20:J20", f"Приймає: {data.receiver}")
+    merge("A16:E16", f"Дата операції: {_formal_date_text(data.operation_date)}")
+    merge("F16:J16", f"Служба забезпечення: {data.service_name or settings.get('service_name', '')}")
+    merge("A17:E17", f"Вид операції: {data.invoice_type}")
+    merge("F17:J17", f"Підстава (мета): {data.basis}")
+    merge("A18:J18", f"Відповідальний одержувач: {data.responsible_receiver}")
+    merge("A19:E19", f"Передає: {data.sender}")
+    merge("F19:J19", f"Приймає: {data.receiver}")
 
     headers = ["№ з/п", "Назва військового майна або однорідна група (вид)", "Код номенклатури", "Одиниця виміру", "Категорія (сорт)", "Вартість за одиницю", "Кількість", "", "Сума", "Примітка"]
     for col, value in enumerate(headers, 1):
-        ws.cell(22, col, value)
-    ws.merge_cells("G22:H22")
+        ws.cell(20, col, value)
+    ws.merge_cells("G20:H20")
     for col in (1, 2, 3, 4, 5, 6, 9, 10):
-        ws.merge_cells(start_row=22, start_column=col, end_row=23, end_column=col)
-    ws["G23"] = "Відправлено\n(вимагається)"
-    ws["H23"] = "Прийнято\n(відпущено)"
+        ws.merge_cells(start_row=20, start_column=col, end_row=21, end_column=col)
+    ws["G21"] = "Відправлено\n(вимагається)"
+    ws["H21"] = "Прийнято\n(відпущено)"
     for col in range(1, 11):
-        ws.cell(24, col, str(col))
-    for row in range(22, 25):
+        ws.cell(22, col, str(col))
+    for row in range(20, 23):
         for col in range(1, 11):
             cell = ws.cell(row, col)
-            cell.font = Font(name="Times New Roman", size=9, bold=row < 24)
+            cell.font = Font(name="Times New Roman", size=8, bold=row < 22)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cell.fill = PatternFill("solid", fgColor="E7E6E6") if row < 24 else PatternFill()
             cell.border = _thin_border()
-    ws.row_dimensions[22].height = 34
-    ws.row_dimensions[23].height = 30
+    # У вихідному формулярі службові назви граф розміщені вертикально.
+    for col in (3, 4, 5, 6):
+        ws.cell(20, col).alignment = Alignment(
+            horizontal="center", vertical="center", text_rotation=90, wrap_text=True
+        )
+    for col in (7, 8):
+        ws.cell(21, col).alignment = Alignment(
+            horizontal="center", vertical="center", text_rotation=90, wrap_text=True
+        )
+    ws.row_dimensions[20].height = 72
+    ws.row_dimensions[21].height = 66
+    ws.row_dimensions[22].height = 18
 
-    current = 25
+    current = 23
     for index, item in enumerate(data.items, 1):
         top, bottom = current, current + 1
         for col in (1, 3, 4, 5, 6, 7, 8, 9, 10):
@@ -264,10 +285,10 @@ def _style_invoice_sheet(ws, data: InvoiceData, settings: dict[str, Any]) -> Non
         current += 2
 
     if not data.items:
-        current = 27
+        current = 25
         for col in (1, 3, 4, 5, 6, 7, 8, 9, 10):
-            ws.merge_cells(start_row=25, start_column=col, end_row=26, end_column=col)
-        for row in (25, 26):
+            ws.merge_cells(start_row=23, start_column=col, end_row=24, end_column=col)
+        for row in (23, 24):
             for col in range(1, 11):
                 ws.cell(row, col).border = _thin_border()
 
@@ -281,7 +302,6 @@ def _style_invoice_sheet(ws, data: InvoiceData, settings: dict[str, Any]) -> Non
         cell = ws.cell(total_row, col)
         cell.font = Font(name="Times New Roman", size=10, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.fill = PatternFill("solid", fgColor="E7E6E6")
         cell.border = _thin_border()
     ws.cell(total_row, 9).number_format = "#,##0.00"
 
@@ -297,20 +317,23 @@ def _style_invoice_sheet(ws, data: InvoiceData, settings: dict[str, Any]) -> Non
         f"на суму {amount_in_words(total_sum)}",
         "                         (сума прописом)",
         "",
+        f"Відпустив: __________________  __________________  {data.sender}",
+        "                         (посада)                         (підпис)                 (власне ім’я та прізвище)",
+        f"Одержав:   __________________  __________________  {data.receiver}",
+        "                         (посада)                         (підпис)                 (власне ім’я та прізвище)",
         "Матеріально відповідальні особи:",
-        f"здав:      {data.sender}     __________________",
-        "                         (посада, власне ім’я та прізвище)       (підпис)",
-        "",
-        f"прийняв: {data.receiver}     __________________",
-        "                         (посада, власне ім’я та прізвище)       (підпис)",
+        f"Здав:       __________________  __________________  {data.sender}",
+        "                         (посада)                         (підпис)                 (власне ім’я та прізвище)",
+        f"Прийняв:  __________________  __________________  {data.receiver}",
+        "                         (посада)                         (підпис)                 (власне ім’я та прізвище)",
     ]
     for offset, line in enumerate(footer_lines):
         row = footer + offset
         merge(f"A{row}:J{row}", line, 10 if "(" not in line else 8, "Матеріально" in line, "left")
 
     last_row = footer + len(footer_lines) - 1
-    ws.freeze_panes = "A25"
-    ws.print_title_rows = "22:24"
+    ws.freeze_panes = "A23"
+    ws.print_title_rows = "20:22"
     ws.print_area = f"A1:J{last_row}"
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
