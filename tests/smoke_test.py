@@ -109,6 +109,15 @@ def main():
     )
     assert summary_dropdown.value == "Узагальнена назва"
 
+    invoice_type_switch = ft.SegmentedButton(
+        selected=[INVOICE_INTERNAL],
+        segments=[
+            ft.Segment(value=INVOICE_INTERNAL, label="Накладна між підрозділами"),
+            ft.Segment(value="external", label="Накладна між військовими частинами"),
+        ],
+    )
+    assert invoice_type_switch.selected == [INVOICE_INTERNAL]
+
     # У Flet-відображенні «Штат» формули нумерації не показуються як текст.
     staff_values = [
         "=ROW()-1", "NOM-A", "Назва А", "од.", 5, None,
@@ -250,9 +259,12 @@ def main():
         assert invoice_path.exists()
         invoice_wb = load_workbook(invoice_path)
         invoice_ws = invoice_wb["Накладна (вимога)"]
-        assert invoice_ws["B25"].value == "Майно без заводського номера"
-        assert invoice_ws["B26"].value is None
-        assert invoice_ws["I25"].value == 200
+        assert invoice_ws["B23"].value == "Майно без заводського номера"
+        assert invoice_ws["B24"].value is None
+        assert invoice_ws["I23"].value == 200
+        assert invoice_ws["C20"].alignment.textRotation == 90
+        assert invoice_ws["G21"].alignment.textRotation == 90
+        assert invoice_ws.freeze_panes == "A23"
         ensure_invoice_sheets(model.wb, loaded_settings)
         added = append_transfer_records(model.wb[SHEET_TRANSFER_REGISTER], invoice, invoice_path)
         assert added == 1
