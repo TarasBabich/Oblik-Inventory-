@@ -50,7 +50,7 @@ except ModuleNotFoundError:  # запуск безпосередньо: python s
     )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.3.8"
+APP_VERSION = "0.3.9"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -2528,8 +2528,18 @@ class FletOblikApp:
                 ft.Row(controls=[sender_edrpou]),
                 ft.Row(controls=[valid_until]),
                 ft.Row(controls=[number, ft.Container(expand=True)], spacing=12),
-                ft.Row(controls=[operation_date, issue_date], spacing=12),
-                ft.Row(controls=[place, ft.Container(expand=True)], spacing=12),
+                ft.Row(
+                    controls=[
+                        operation_date,
+                        ft.Column(
+                            controls=[place, issue_date],
+                            spacing=12,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=12,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
                 ft.Row(controls=[basis, service_name], spacing=12),
                 ft.Row(controls=[responsible, sender], spacing=12),
                 ft.Row(controls=[receiver, ft.Container(expand=True)], spacing=12),
@@ -4788,8 +4798,3 @@ class FletOblikApp:
 
 
 def main(page: ft.Page):
-    FletOblikApp(page)
-
-
-if __name__ == "__main__":
-    ft.run(main)
