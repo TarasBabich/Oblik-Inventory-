@@ -50,7 +50,7 @@ except ModuleNotFoundError:  # запуск безпосередньо: python s
     )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.3.7"
+APP_VERSION = "0.3.8"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -2332,7 +2332,9 @@ class FletOblikApp:
             for item_entry in self.invoice_item_entries:
                 try:
                     price_value = float(str(item_entry["price"].value or "0").replace(" ", "").replace(",", "."))
-                    qty_value = float(str(item_entry["qty_sent"].value or "0").replace(" ", "").replace(",", "."))
+                    qty_received_value = float(str(item_entry["qty_received"].value or "0").replace(" ", "").replace(",", "."))
+                    qty_sent_value = float(str(item_entry["qty_sent"].value or "0").replace(" ", "").replace(",", "."))
+                    qty_value = qty_received_value or qty_sent_value
                     item_total = round(price_value * qty_value, 2)
                 except ValueError:
                     item_total = 0.0
@@ -2356,7 +2358,7 @@ class FletOblikApp:
             category = ft.TextField(hint_text="кат.", width=75, dense=True)
             price = ft.TextField(value="0", width=105, dense=True, on_change=recalculate_invoice_total)
             qty_sent = ft.TextField(value="1", width=85, dense=True, on_change=recalculate_invoice_total)
-            qty_received = qty_sent
+            qty_received = ft.TextField(value="1", width=85, dense=True, on_change=recalculate_invoice_total)
             item_sum = ft.TextField(value="0,00", width=110, dense=True, read_only=True)
             note = ft.TextField(visible=False)
 
@@ -2378,7 +2380,7 @@ class FletOblikApp:
                     controls=[
                         title,
                         ft.Column(controls=[name, serial], spacing=4),
-                        code, unit, category, price, qty_sent,
+                        code, unit, category, price, qty_sent, qty_received,
                         item_sum,
                         ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Видалити позицію", on_click=remove_item),
                     ],
@@ -2561,7 +2563,22 @@ class FletOblikApp:
                     ft.Text("Од. виміру", width=75, weight=ft.FontWeight.BOLD),
                     ft.Text("Категорія", width=75, weight=ft.FontWeight.BOLD),
                     ft.Text("Ціна", width=105, weight=ft.FontWeight.BOLD),
-                    ft.Text("Кількість", width=85, weight=ft.FontWeight.BOLD),
+                    ft.Column(
+                        width=85,
+                        spacing=1,
+                        controls=[
+                            ft.Text("Відправляється", size=11, weight=ft.FontWeight.BOLD),
+                            ft.Text("(видається)", size=10, color=ft.Colors.BLUE_GREY_600),
+                        ],
+                    ),
+                    ft.Column(
+                        width=85,
+                        spacing=1,
+                        controls=[
+                            ft.Text("Прийнято", size=11, weight=ft.FontWeight.BOLD),
+                            ft.Text("(відпущено)", size=10, color=ft.Colors.BLUE_GREY_600),
+                        ],
+                    ),
                     ft.Text("Сума", width=110, weight=ft.FontWeight.BOLD),
                     ft.Container(width=40),
                 ],
