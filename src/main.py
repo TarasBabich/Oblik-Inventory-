@@ -50,7 +50,7 @@ except ModuleNotFoundError:  # запуск безпосередньо: python s
     )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.3.5"
+APP_VERSION = "0.3.6"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
