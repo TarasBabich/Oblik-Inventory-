@@ -4798,3 +4798,8 @@ class FletOblikApp:
 
 
 def main(page: ft.Page):
+    FletOblikApp(page)
+
+
+if __name__ == "__main__":
+    ft.run(main)
