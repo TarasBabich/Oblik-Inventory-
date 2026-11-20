@@ -50,7 +50,7 @@ except ModuleNotFoundError:  # запуск безпосередньо: python s
     )
 
 APP_TITLE = "Oblik Inventory"
-APP_VERSION = "0.3.6"
+APP_VERSION = "0.3.7"
 
 SHEET_STAFF = "Штат"
 SHEET_MOVEMENT = "Рух майна"
@@ -2399,6 +2399,16 @@ class FletOblikApp:
             if e is not None:
                 self.page.update()
 
+        def remove_last_item(e=None):
+            if len(self.invoice_item_entries) <= 1:
+                self._show_message("Позиції майна", "У накладній має залишатися хоча б одна позиція.")
+                return
+            entry = self.invoice_item_entries.pop()
+            items_host.controls.remove(entry["container"])
+            renumber_items()
+            recalculate_invoice_total()
+            self.page.update()
+
         add_item()
 
         def number_value(value: Any, field_name: str) -> float:
@@ -2597,7 +2607,15 @@ class FletOblikApp:
                             icon=ft.Icons.ADD,
                             on_click=add_item,
                         ),
+                        ft.Button(
+                            content="Прибрати позицію",
+                            icon=ft.Icons.REMOVE,
+                            bgcolor=ft.Colors.RED_600,
+                            color=ft.Colors.WHITE,
+                            on_click=remove_last_item,
+                        ),
                     ],
+                    spacing=10,
                 ),
             ],
         )
